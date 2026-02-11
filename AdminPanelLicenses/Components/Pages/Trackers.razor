@@ -1,0 +1,898 @@
+@page "/trackers"
+@rendermode InteractiveServer
+@inject AdminPanelLicenses.Services.TrackerManagementService TrackerService
+@using AdminPanelLicenses.Models
+
+<PageTitle>Trackers - Admin Panel</PageTitle>
+
+<h1 class="mb-4">📡 Gestión de Trackers</h1>
+
+<ul class="nav nav-tabs mb-3" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link @(_activeTab == "available" ? "active" : "")"
+                @onclick='() => SwitchTab("available")'>
+            <i class="bi bi-broadcast-pin"></i> Disponibles (@_availableTrackers.Count)
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link @(_activeTab == "detected" ? "active" : "")"
+                @onclick='() => SwitchTab("detected")'>
+            <i class="bi bi-radar"></i> Detectados (@_detectedTrackers.Count)
+        </button>
+    </li>
+</ul>
+
+@if (_loading)
+{
+    <div class="text-center my-5">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Cargando...</span>
+        </div>
+        <p class="mt-2">Cargando trackers...</p>
+    </div>
+}
+else if (_error != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <strong>Error:</strong> @_error
+        <button type="button" class="btn-close" @onclick="() => _error = null"></button>
+    </div>
+}
+
+@if (_successMessage != null)
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <strong>Éxito:</strong> @_successMessage
+        <button type="button" class="btn-close" @onclick="() => _successMessage = null"></button>
+    </div>
+}
+
+@if (!_loading)
+{
+    <div class="row mb-3">
+        <div class="col-md-6">
+            <input type="text" class="form-control" placeholder="Buscar tracker..." @bind="_searchQuery" @bind:event="oninput" />
+        </div>
+        <div class="col-md-6 text-end">
+            @if (_selectedTrackerIds.Any())
+            {
+                <button class="btn btn-success me-2" @onclick="ShowBulkAssignModal">
+                    <i class="bi bi-check2-all"></i> Asignar Seleccionados (@_selectedTrackerIds.Count)
+                </button>
+                <button class="btn btn-outline-secondary me-2" @onclick="ClearSelection">
+                    <i class="bi bi-x-circle"></i> Limpiar
+                </button>
+            }
+            <button class="btn btn-primary" @onclick="RefreshTrackers">
+                <i class="bi bi-arrow-clockwise"></i> Actualizar
+            </button>
+        </div>
+    </div>
+
+    @if (_activeTab == "available")
+    {
+        @if (_availableTrackers.Any())
+        {
+            var filteredTrackers = string.IsNullOrWhiteSpace(_searchQuery)
+                ? _availableTrackers
+                : _availableTrackers.Where(t => t.DeviceId.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            <div class="alert alert-info">
+                <strong>Trackers Disponibles:</strong> @filteredTrackers.Count trackers listos para asignar
+            </div>
+
+            <div class="row g-3">
+                @foreach (var tracker in filteredTrackers)
+                {
+                    var isSelected = _selectedTrackerIds.Contains(tracker.Id);
+                    <div class="col-md-6 col-lg-4">
+                        <div class="card h-100 @(isSelected ? "border-primary border-2" : "border-success")">
+                            <div class="card-header @(isSelected ? "bg-primary" : "bg-success") text-white d-flex justify-content-between align-items-center">
+                                <div class="form-check mb-0">
+                                    <input class="form-check-input" type="checkbox"
+                                           checked="@isSelected"
+                                           @onclick="() => ToggleTrackerSelection(tracker.Id)"
+                                           id="tracker_@tracker.Id" />
+                                    <label class="form-check-label text-white fw-bold" for="tracker_@tracker.Id">
+                                        @tracker.DeviceId
+                                    </label>
+                                </div>
+                                @if (tracker.IsOnline)
+                                {
+                                    <span class="badge bg-light text-success">Online</span>
+                                }
+                            </div>
+                            <div class="card-body">
+                                <p class="mb-2">
+                                    <small class="text-muted">Nombre:</small>
+                                    <br />
+                                    <strong>@tracker.Name</strong>
+                                </p>
+                                <p class="mb-2">
+                                    <small class="text-muted">Modelo:</small>
+                                    <br />
+                                    @tracker.Model
+                                </p>
+                                <p class="mb-2">
+                                    <small class="text-muted">Batería:</small>
+                                    <br />
+                                    <span class="badge @GetBatteryClass(tracker.BatteryLevel)">
+                                        @tracker.BatteryLevel%
+                                    </span>
+                                </p>
+                                <p class="mb-2">
+                                    <small class="text-muted">Última señal:</small>
+                                    <br />
+                                    <small>@tracker.LastSeen.ToString("dd/MM/yyyy HH:mm")</small>
+                                </p>
+                            </div>
+                            <div class="card-footer">
+                                <button class="btn btn-primary btn-sm w-100" @onclick="() => ShowAssignModal(tracker)">
+                                    <i class="bi bi-plus-circle"></i> Asignar a Cliente
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        else
+        {
+            <div class="alert alert-warning">
+                No hay trackers disponibles para asignar en este momento.
+            </div>
+        }
+    }
+    else if (_activeTab == "detected")
+    {
+        @if (_detectedTrackers.Any())
+        {
+            var filteredTrackers = string.IsNullOrWhiteSpace(_searchQuery)
+                ? _detectedTrackers
+                : _detectedTrackers.Where(t => t.DeviceId.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            <div class="alert alert-info">
+                <strong>Trackers Detectados:</strong> @filteredTrackers.Count trackers transmitiendo señales GPS
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-striped table-hover">
+                    <thead>
+                        <tr>
+                            <th style="width: 50px;">
+                                <input type="checkbox"
+                                       class="form-check-input"
+                                       @onchange="(e) => ToggleAllTrackers(filteredTrackers, (bool)e.Value!)"
+                                       title="Seleccionar todos" />
+                            </th>
+                            <th>Device ID</th>
+                            <th>Nombre</th>
+                            <th>Modelo</th>
+                            <th>Estado</th>
+                            <th>Batería</th>
+                            <th>Última Señal</th>
+                            <th>Acción</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var tracker in filteredTrackers)
+                        {
+                            var isSelected = _selectedTrackerIds.Contains(tracker.Id);
+                            var canBeSelected = tracker.Status == "Available" || tracker.Id == 0;
+                            <tr class="@(isSelected ? "table-primary" : "")">
+                                <td>
+                                    @if (canBeSelected)
+                                    {
+                                        <input type="checkbox"
+                                               class="form-check-input"
+                                               checked="@isSelected"
+                                               @onchange="() => ToggleTrackerSelection(tracker.Id)" />
+                                    }
+                                </td>
+                                <td><strong>@tracker.DeviceId</strong></td>
+                                <td>@tracker.Name</td>
+                                <td>@tracker.Model</td>
+                                <td>
+                                    @if (tracker.Id == 0)
+                                    {
+                                        <span class="badge bg-warning">No Registrado</span>
+                                    }
+                                    else if (tracker.Status == "Available")
+                                    {
+                                        <span class="badge bg-success">Disponible</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge bg-secondary">@tracker.Status</span>
+                                    }
+                                </td>
+                                <td>
+                                    <span class="badge @GetBatteryClass(tracker.BatteryLevel)">
+                                        @tracker.BatteryLevel%
+                                    </span>
+                                </td>
+                                <td><small>@tracker.LastSeen.ToString("HH:mm:ss")</small></td>
+                                <td>
+                                    @if (canBeSelected)
+                                    {
+                                        <button class="btn btn-sm btn-primary" @onclick="() => ShowAssignModal(tracker)">
+                                            Asignar
+                                        </button>
+                                    }
+                                    else
+                                    {
+                                        <small class="text-muted">Ya asignado</small>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        else
+        {
+            <div class="alert alert-warning">
+                No se detectaron trackers transmitiendo señales GPS en este momento.
+                <br />
+                <small>Asegúrate de que el emulador GPS esté ejecutándose.</small>
+            </div>
+        }
+    }
+}
+
+<!-- Modal para asignar un tracker individual a customer -->
+@if (_showAssignModal && _selectedTracker != null)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">Asignar Tracker: @_selectedTracker.DeviceId</h5>
+                    <button type="button" class="btn-close" @onclick="CloseAssignModal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (_loadingCustomers)
+                    {
+                        <div class="text-center py-3">
+                            <div class="spinner-border text-primary" role="status"></div>
+                            <p>Cargando clientes...</p>
+                        </div>
+                    }
+                    else if (_customers.Any())
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Seleccionar Cliente</label>
+                            <select class="form-select" @bind="_selectedCustomerId">
+                                <option value="0">-- Seleccione un cliente --</option>
+                                @foreach (var customer in _customers.Where(c => c.Status == "Active"))
+                                {
+                                    var hasSpace = customer.ActiveTrackerCount < customer.TrackerLimit;
+                                    <option value="@customer.Id" disabled="@(!hasSpace)">
+                                        @customer.CompanyName - @customer.Plan
+                                        (@customer.ActiveTrackerCount/@customer.TrackerLimit trackers)
+                                        @if (!hasSpace)
+                                        {
+                                            @("- LÍMITE ALCANZADO")
+                                        }
+                                    </option>
+                                }
+                            </select>
+                        </div>
+
+                        @if (_selectedCustomerId > 0)
+                        {
+                            var customer = _customers.FirstOrDefault(c => c.Id == _selectedCustomerId);
+                            if (customer != null)
+                            {
+                                <div class="alert alert-info">
+                                    <strong>Cliente seleccionado:</strong> @customer.CompanyName<br />
+                                    <strong>Plan:</strong> @customer.Plan<br />
+                                    <strong>Trackers:</strong> @customer.ActiveTrackerCount / @customer.TrackerLimit
+                                </div>
+                            }
+                        }
+                    }
+                    else
+                    {
+                        <div class="alert alert-warning">
+                            No hay clientes disponibles para asignar trackers.
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseAssignModal">Cancelar</button>
+                    <button type="button" class="btn btn-primary"
+                            @onclick="AssignTracker"
+                            disabled="@(_selectedCustomerId == 0 || _assigning)">
+                        @if (_assigning)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                            <text>Asignando...</text>
+                        }
+                        else
+                        {
+                            <text>Asignar Tracker</text>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+<!-- Modal para asignar múltiples trackers a customer -->
+@if (_showBulkAssignModal)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header bg-primary text-white">
+                    <h5 class="modal-title">
+                        <i class="bi bi-check2-all"></i>
+                        Asignación Masiva: @_selectedTrackerIds.Count Trackers
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CloseBulkAssignModal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (_loadingCustomers)
+                    {
+                        <div class="text-center py-3">
+                            <div class="spinner-border text-primary" role="status"></div>
+                            <p>Cargando clientes...</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <!-- Lista de trackers seleccionados -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Trackers Seleccionados:</label>
+                            <div class="selected-trackers-list">
+                                @foreach (var trackerId in _selectedTrackerIds)
+                                {
+                                    var tracker = GetTrackerById(trackerId);
+                                    if (tracker != null)
+                                    {
+                                        <span class="badge bg-primary me-1 mb-1">
+                                            @tracker.DeviceId
+                                            <i class="bi bi-x-circle" @onclick="() => ToggleTrackerSelection(trackerId)" style="cursor: pointer;"></i>
+                                        </span>
+                                    }
+                                }
+                            </div>
+                        </div>
+
+                        <!-- Selector de cliente -->
+                        @if (_customers.Any())
+                        {
+                            <div class="mb-3">
+                                <label class="form-label fw-bold">Seleccionar Cliente</label>
+                                <select class="form-select" @bind="_selectedCustomerId">
+                                    <option value="0">-- Seleccione un cliente --</option>
+                                    @foreach (var customer in _customers.Where(c => c.Status == "Active"))
+                                    {
+                                        var availableSpace = customer.TrackerLimit - customer.ActiveTrackerCount;
+                                        var hasEnoughSpace = availableSpace >= _selectedTrackerIds.Count;
+                                        <option value="@customer.Id" disabled="@(!hasEnoughSpace)">
+                                            @customer.CompanyName - @customer.Plan
+                                            (@customer.ActiveTrackerCount/@customer.TrackerLimit trackers)
+                                            @if (!hasEnoughSpace)
+                                            {
+                                                @($" - Espacio insuficiente (necesita {_selectedTrackerIds.Count}, tiene {availableSpace})")
+                                            }
+                                        </option>
+                                    }
+                                </select>
+                            </div>
+
+                            @if (_selectedCustomerId > 0)
+                            {
+                                var customer = _customers.FirstOrDefault(c => c.Id == _selectedCustomerId);
+                                if (customer != null)
+                                {
+                                    var availableSpace = customer.TrackerLimit - customer.ActiveTrackerCount;
+                                    <div class="alert alert-info">
+                                        <strong>Cliente seleccionado:</strong> @customer.CompanyName<br />
+                                        <strong>Plan:</strong> @customer.Plan<br />
+                                        <strong>Trackers actuales:</strong> @customer.ActiveTrackerCount / @customer.TrackerLimit<br />
+                                        <strong>Espacio disponible:</strong> @availableSpace<br />
+                                        <strong>Trackers a asignar:</strong> @_selectedTrackerIds.Count
+                                    </div>
+                                }
+                            }
+                        }
+                        else
+                        {
+                            <div class="alert alert-warning">
+                                No hay clientes disponibles para asignar trackers.
+                            </div>
+                        }
+
+                        <!-- Progreso de asignación -->
+                        @if (_bulkAssigning && _bulkAssignTotalTrackers > 0)
+                        {
+                            var percentage = Math.Round((double)_bulkAssignProgress * 100 / _bulkAssignTotalTrackers, 0);
+                            <div class="mt-3">
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Progreso: @_bulkAssignProgress / @_bulkAssignTotalTrackers</span>
+                                    <span>@percentage%</span>
+                                </div>
+                                <div class="progress" style="height: 25px;">
+                                    <div class="progress-bar progress-bar-striped progress-bar-animated"
+                                         role="progressbar"
+                                         style="width: @percentage%">
+                                        @_bulkAssignProgress / @_bulkAssignTotalTrackers
+                                    </div>
+                                </div>
+                                @if (!string.IsNullOrEmpty(_bulkAssignCurrentTracker))
+                                {
+                                    <small class="text-muted mt-2 d-block">
+                                        <i class="bi bi-arrow-right-circle"></i> Asignando: @_bulkAssignCurrentTracker
+                                    </small>
+                                }
+                            </div>
+                        }
+
+                        <!-- Resultados de asignación -->
+                        @if (_bulkAssignResults.Any())
+                        {
+                            <div class="mt-3">
+                                <label class="form-label fw-bold">Resultados:</label>
+                                <div class="results-list" style="max-height: 200px; overflow-y: auto;">
+                                    @foreach (var result in _bulkAssignResults)
+                                    {
+                                        <div class="alert @(result.success ? "alert-success" : "alert-danger") py-2 mb-1">
+                                            <i class="bi @(result.success ? "bi-check-circle" : "bi-x-circle")"></i>
+                                            <strong>@result.deviceId:</strong> @result.message
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        }
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseBulkAssignModal" disabled="@_bulkAssigning">
+                        @(_bulkAssigning ? "Asignando..." : "Cancelar")
+                    </button>
+                    <button type="button" class="btn btn-success"
+                            @onclick="BulkAssignTrackers"
+                            disabled="@(_selectedCustomerId == 0 || _bulkAssigning || !_customers.Any())">
+                        @if (_bulkAssigning)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                            <text>Asignando @_bulkAssignProgress/@_bulkAssignTotalTrackers...</text>
+                        }
+                        else
+                        {
+                            <i class="bi bi-check2-all"></i>
+                            <text>Asignar @_selectedTrackerIds.Count Trackers</text>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _loadingCustomers = false;
+    private bool _assigning = false;
+    private string? _error = null;
+    private string? _successMessage = null;
+    private string _activeTab = "available";
+    private string _searchQuery = "";
+
+    private List<TrackerDto> _availableTrackers = new();
+    private List<TrackerDto> _detectedTrackers = new();
+    private List<CustomerDto> _customers = new();
+
+    // Asignación individual
+    private bool _showAssignModal = false;
+    private TrackerDto? _selectedTracker = null;
+    private int _selectedCustomerId = 0;
+
+    // Selección múltiple
+    private HashSet<int> _selectedTrackerIds = new();
+
+    // Asignación masiva
+    private bool _showBulkAssignModal = false;
+    private bool _bulkAssigning = false;
+    private int _bulkAssignProgress = 0;
+    private int _bulkAssignTotalTrackers = 0; // Total de trackers al inicio
+    private string _bulkAssignCurrentTracker = "";
+    private List<(bool success, string message, string deviceId)> _bulkAssignResults = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTrackers();
+    }
+
+    private async Task LoadTrackers()
+    {
+        try
+        {
+            _loading = true;
+            _error = null;
+            StateHasChanged();
+
+            _availableTrackers = await TrackerService.GetAvailableTrackersAsync();
+            _detectedTrackers = await TrackerService.GetDetectedTrackersAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error al cargar trackers: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RefreshTrackers()
+    {
+        await LoadTrackers();
+    }
+
+    private void SwitchTab(string tab)
+    {
+        _activeTab = tab;
+        _searchQuery = "";
+    }
+
+    private async Task ShowAssignModal(TrackerDto tracker)
+    {
+        _selectedTracker = tracker;
+        _selectedCustomerId = 0;
+        _showAssignModal = true;
+        _loadingCustomers = true;
+        StateHasChanged();
+
+        try
+        {
+            _customers = await TrackerService.GetAllCustomersAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error al cargar clientes: {ex.Message}";
+        }
+        finally
+        {
+            _loadingCustomers = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CloseAssignModal()
+    {
+        _showAssignModal = false;
+        _selectedTracker = null;
+        _selectedCustomerId = 0;
+    }
+
+    private async Task AssignTracker()
+    {
+        if (_selectedTracker == null || _selectedCustomerId == 0) return;
+
+        try
+        {
+            _assigning = true;
+            _error = null;
+            _successMessage = null;
+            StateHasChanged();
+
+            var result = await TrackerService.AssignTrackerAsync(_selectedTracker.Id, _selectedCustomerId);
+
+            if (result.success)
+            {
+                _successMessage = result.message;
+                CloseAssignModal();
+                await LoadTrackers();
+            }
+            else
+            {
+                _error = result.message;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error al asignar tracker: {ex.Message}";
+        }
+        finally
+        {
+            _assigning = false;
+            StateHasChanged();
+        }
+    }
+
+    // ========== MÉTODOS DE SELECCIÓN MÚLTIPLE ==========
+
+    /// <summary>
+    /// Alterna la selección de un tracker individual
+    /// </summary>
+    private void ToggleTrackerSelection(int trackerId)
+    {
+        if (_selectedTrackerIds.Contains(trackerId))
+        {
+            _selectedTrackerIds.Remove(trackerId);
+        }
+        else
+        {
+            _selectedTrackerIds.Add(trackerId);
+        }
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Selecciona o deselecciona todos los trackers visibles
+    /// </summary>
+    private void ToggleAllTrackers(List<TrackerDto> trackers, bool select)
+    {
+        if (select)
+        {
+            // Seleccionar solo los que están disponibles
+            foreach (var tracker in trackers.Where(t => t.Status == "Available" || t.Id == 0))
+            {
+                _selectedTrackerIds.Add(tracker.Id);
+            }
+        }
+        else
+        {
+            // Deseleccionar todos los visibles
+            foreach (var tracker in trackers)
+            {
+                _selectedTrackerIds.Remove(tracker.Id);
+            }
+        }
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Limpia la selección de trackers
+    /// </summary>
+    private void ClearSelection()
+    {
+        _selectedTrackerIds.Clear();
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Obtiene un tracker por su ID
+    /// </summary>
+    private TrackerDto? GetTrackerById(int trackerId)
+    {
+        return _availableTrackers.FirstOrDefault(t => t.Id == trackerId)
+            ?? _detectedTrackers.FirstOrDefault(t => t.Id == trackerId);
+    }
+
+    // ========== MÉTODOS DE ASIGNACIÓN MASIVA ==========
+
+    /// <summary>
+    /// Muestra el modal de asignación masiva
+    /// </summary>
+    private async Task ShowBulkAssignModal()
+    {
+        _showBulkAssignModal = true;
+        _selectedCustomerId = 0;
+        _bulkAssignResults.Clear();
+        _bulkAssignProgress = 0;
+        _bulkAssignTotalTrackers = _selectedTrackerIds.Count;
+        _bulkAssignCurrentTracker = "";
+        _loadingCustomers = true;
+        StateHasChanged();
+
+        try
+        {
+            _customers = await TrackerService.GetAllCustomersAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error al cargar clientes: {ex.Message}";
+        }
+        finally
+        {
+            _loadingCustomers = false;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Cierra el modal de asignación masiva
+    /// </summary>
+    private void CloseBulkAssignModal()
+    {
+        _showBulkAssignModal = false;
+        _selectedCustomerId = 0;
+        _bulkAssignResults.Clear();
+        _bulkAssignProgress = 0;
+        _bulkAssignTotalTrackers = 0;
+        _bulkAssignCurrentTracker = "";
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Asigna múltiples trackers a un cliente
+    /// </summary>
+    private async Task BulkAssignTrackers()
+    {
+        if (_selectedCustomerId == 0 || !_selectedTrackerIds.Any()) return;
+
+        try
+        {
+            _bulkAssigning = true;
+            _bulkAssignProgress = 0;
+            _bulkAssignResults.Clear();
+            _error = null;
+
+            // CRÍTICO: Guardar la lista y el total al inicio
+            var trackerIdsToAssign = _selectedTrackerIds.ToList();
+            _bulkAssignTotalTrackers = trackerIdsToAssign.Count;
+
+            StateHasChanged();
+
+            int successCount = 0;
+            int failureCount = 0;
+            var successfulTrackerIds = new List<int>();
+
+            foreach (var trackerId in trackerIdsToAssign)
+            {
+                var tracker = GetTrackerById(trackerId);
+                if (tracker == null) continue;
+
+                _bulkAssignCurrentTracker = tracker.DeviceId;
+                StateHasChanged();
+
+                try
+                {
+                    var result = await TrackerService.AssignTrackerAsync(trackerId, _selectedCustomerId);
+
+                    _bulkAssignResults.Add((result.success, result.message, tracker.DeviceId));
+
+                    if (result.success)
+                    {
+                        successCount++;
+                        successfulTrackerIds.Add(trackerId);
+                    }
+                    else
+                    {
+                        failureCount++;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _bulkAssignResults.Add((false, ex.Message, tracker.DeviceId));
+                    failureCount++;
+                }
+
+                _bulkAssignProgress++;
+                StateHasChanged();
+
+                // Pequeña pausa para no saturar el servidor
+                await Task.Delay(100);
+            }
+
+            // Remover de la selección DESPUÉS del proceso, solo los exitosos
+            foreach (var trackerId in successfulTrackerIds)
+            {
+                _selectedTrackerIds.Remove(trackerId);
+            }
+
+            // Recargar datos después de la asignación
+            await LoadTrackers();
+
+            // Mostrar mensaje final
+            if (successCount > 0)
+            {
+                _successMessage = $"✅ Se asignaron {successCount} tracker(s) exitosamente.";
+                if (failureCount > 0)
+                {
+                    _successMessage += $" ⚠️ {failureCount} fallo(s).";
+                }
+            }
+            else
+            {
+                _error = $"No se pudo asignar ningún tracker. Revisa los detalles arriba.";
+            }
+
+            StateHasChanged();
+
+            // Si todos se asignaron exitosamente, cerrar el modal después de 2 segundos
+            if (failureCount == 0)
+            {
+                await Task.Delay(2000);
+                CloseBulkAssignModal();
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error en asignación masiva: {ex.Message}";
+        }
+        finally
+        {
+            _bulkAssigning = false;
+            _bulkAssignCurrentTracker = "";
+            StateHasChanged();
+        }
+    }
+
+    private string GetBatteryClass(int batteryLevel)
+    {
+        if (batteryLevel > 50) return "bg-success";
+        if (batteryLevel > 20) return "bg-warning";
+        return "bg-danger";
+    }
+}
+
+<style>
+    /* Tarjetas seleccionadas */
+    .card.border-primary {
+        box-shadow: 0 0 15px rgba(13, 110, 253, 0.3);
+        transform: scale(1.02);
+        transition: all 0.3s ease;
+    }
+
+    /* Checkbox en el header */
+    .card-header .form-check-input {
+        cursor: pointer;
+        width: 18px;
+        height: 18px;
+        margin-right: 8px;
+    }
+
+    .card-header .form-check-label {
+        cursor: pointer;
+        user-select: none;
+    }
+
+    /* Filas seleccionadas en tabla */
+    .table-primary {
+        background-color: rgba(13, 110, 253, 0.1) !important;
+    }
+
+    /* Lista de trackers seleccionados */
+    .selected-trackers-list {
+        background: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 12px;
+        min-height: 50px;
+    }
+
+    .selected-trackers-list .badge {
+        font-size: 0.9rem;
+        padding: 6px 10px;
+    }
+
+    .selected-trackers-list .badge .bi-x-circle {
+        margin-left: 6px;
+        opacity: 0.7;
+    }
+
+    .selected-trackers-list .badge .bi-x-circle:hover {
+        opacity: 1;
+    }
+
+    /* Lista de resultados */
+    .results-list {
+        border: 1px solid #dee2e6;
+        border-radius: 8px;
+        padding: 8px;
+    }
+
+    /* Animación de progress bar */
+    .progress-bar-animated {
+        animation: progress-bar-stripes 1s linear infinite;
+    }
+
+    /* Mejoras de modal */
+    .modal-lg {
+        max-width: 700px;
+    }
+
+    /* Botones de acción mejorados */
+    .btn-success {
+        font-weight: 600;
+    }
+</style>

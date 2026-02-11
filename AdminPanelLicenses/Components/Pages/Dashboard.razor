@@ -1,0 +1,212 @@
+@page "/"
+@rendermode InteractiveServer
+@inject AdminPanelLicenses.Services.ApiService ApiService
+
+<PageTitle>Dashboard - Admin Panel</PageTitle>
+
+<h1 class="mb-4">📊 Dashboard</h1>
+
+@if (_loading)
+{
+    <div class="text-center my-5">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Cargando...</span>
+        </div>
+        <p class="mt-2">Cargando estadísticas...</p>
+    </div>
+}
+else if (_error != null)
+{
+    <div class="alert alert-danger">
+        <strong>Error:</strong> @_error
+    </div>
+}
+else if (_stats != null)
+{
+    <div class="row g-4">
+        <!-- Customers Card -->
+        <div class="col-md-6">
+            <div class="card border-primary h-100">
+                <div class="card-header bg-primary text-white">
+                    <h5 class="mb-0">
+                        <i class="bi bi-people-fill"></i> Clientes
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row text-center">
+                        <div class="col-6">
+                            <h2 class="display-4 text-primary">@_stats.Customers.Total</h2>
+                            <p class="text-muted">Total</p>
+                        </div>
+                        <div class="col-6">
+                            <h2 class="display-4 text-success">@_stats.Customers.Active</h2>
+                            <p class="text-muted">Activos</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Trackers Card -->
+        <div class="col-md-6">
+            <div class="card border-success h-100">
+                <div class="card-header bg-success text-white">
+                    <h5 class="mb-0">
+                        <i class="bi bi-broadcast-pin"></i> Trackers
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="row text-center">
+                        <div class="col-4">
+                            <h3 class="display-6 text-success">@_stats.Trackers.Total</h3>
+                            <p class="text-muted small">Total</p>
+                        </div>
+                        <div class="col-4">
+                            <h3 class="display-6 text-info">@_stats.Trackers.Assigned</h3>
+                            <p class="text-muted small">Asignados</p>
+                        </div>
+                        <div class="col-4">
+                            <h3 class="display-6 text-warning">@_stats.Trackers.Available</h3>
+                            <p class="text-muted small">Disponibles</p>
+                        </div>
+                    </div>
+                    <hr />
+                    <div class="text-center">
+                        <h4 class="text-success">
+                            <i class="bi bi-wifi"></i> @_stats.Trackers.Online
+                        </h4>
+                        <p class="text-muted small">Trackers Online (últimos 30 min)</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Actions -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">⚡ Acciones Rápidas</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-grid gap-2 d-md-flex">
+                        <a href="/customers" class="btn btn-primary">
+                            <i class="bi bi-people-fill"></i> Ver Clientes
+                        </a>
+                        <a href="/trackers" class="btn btn-success">
+                            <i class="bi bi-broadcast-pin"></i> Gestionar Trackers
+                        </a>
+                        <a href="/assignments" class="btn btn-info">
+                            <i class="bi bi-link-45deg"></i> Ver Asignaciones
+                        </a>
+                        <button class="btn btn-outline-secondary" @onclick="RefreshStats">
+                            <i class="bi bi-arrow-clockwise"></i> Actualizar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- System Info -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">ℹ️ Información del Sistema</h5>
+                </div>
+                <div class="card-body">
+                    <p>
+                        <strong>Última actualización:</strong> @DateTime.Now.ToString("dd/MM/yyyy HH:mm:ss")
+                    </p>
+                    <p>
+                        <strong>Utilización de trackers:</strong>
+                        @if (_stats.Trackers.Total > 0)
+                        {
+                            var percentage = (_stats.Trackers.Assigned * 100.0 / _stats.Trackers.Total);
+                            <span>@percentage.ToString("F1")% (@_stats.Trackers.Assigned/@_stats.Trackers.Total)</span>
+                        }
+                        else
+                        {
+                            <span>N/A</span>
+                        }
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private string? _error = null;
+    private SystemStats? _stats = null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadStats();
+    }
+
+    private async Task LoadStats()
+    {
+        try
+        {
+            _loading = true;
+            _error = null;
+            StateHasChanged();
+
+            var response = await ApiService.GetAsync<StatsResponse>("/api/Admin/stats");
+
+            if (response?.Success == true && response.Stats != null)
+            {
+                _stats = response.Stats;
+            }
+            else
+            {
+                _error = "No se pudieron cargar las estadísticas";
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error al cargar estadísticas: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task RefreshStats()
+    {
+        await LoadStats();
+    }
+
+    // DTOs
+    private class StatsResponse
+    {
+        public bool Success { get; set; }
+        public SystemStats? Stats { get; set; }
+    }
+
+    private class SystemStats
+    {
+        public CustomerStats Customers { get; set; } = new();
+        public TrackerStats Trackers { get; set; } = new();
+    }
+
+    private class CustomerStats
+    {
+        public int Total { get; set; }
+        public int Active { get; set; }
+    }
+
+    private class TrackerStats
+    {
+        public int Total { get; set; }
+        public int Assigned { get; set; }
+        public int Available { get; set; }
+        public int Online { get; set; }
+    }
+}

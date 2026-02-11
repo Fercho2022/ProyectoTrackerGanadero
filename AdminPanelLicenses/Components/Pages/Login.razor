@@ -1,0 +1,244 @@
+@page "/login"
+@using AdminPanelLicenses.Services
+@inject AdminApiService ApiService
+@inject AuthStateService AuthState
+@inject NavigationManager Navigation
+@rendermode InteractiveServer
+@implements IDisposable
+
+<PageTitle>Admin Login - Tracker Ganadero</PageTitle>
+
+<div class="login-container">
+    <div class="login-card">
+        <div class="login-header">
+            <h1>🔐 Panel de Administración</h1>
+            <p>Tracker Ganadero - Gestión de Licencias</p>
+        </div>
+
+        <EditForm Model="@loginModel" OnValidSubmit="@HandleLogin" class="login-form">
+            <DataAnnotationsValidator />
+
+            <div class="form-group">
+                <label for="username">Usuario/Email</label>
+                <InputText id="username" @bind-Value="loginModel.Username"
+                           class="form-control" placeholder="admin@trackerganadero.com" />
+                <ValidationMessage For="@(() => loginModel.Username)" />
+            </div>
+
+            <div class="form-group">
+                <label for="password">Contraseña</label>
+                <InputText id="password" type="password" @bind-Value="loginModel.Password"
+                           class="form-control" placeholder="••••••••" />
+                <ValidationMessage For="@(() => loginModel.Password)" />
+            </div>
+
+            @if (!string.IsNullOrEmpty(errorMessage))
+            {
+                <div class="alert alert-danger">
+                    @errorMessage
+                </div>
+            }
+
+            <button type="submit" class="btn btn-primary" disabled="@isLoading">
+                @if (isLoading)
+                {
+                    <span>Iniciando sesión...</span>
+                }
+                else
+                {
+                    <span>Iniciar Sesión</span>
+                }
+            </button>
+        </EditForm>
+
+        <div class="login-footer">
+            <p>Acceso solo para administradores del sistema</p>
+        </div>
+    </div>
+</div>
+
+<style>
+    .login-container {
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        min-height: 100vh;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+
+    .login-card {
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        padding: 40px;
+        width: 100%;
+        max-width: 450px;
+    }
+
+    .login-header {
+        text-align: center;
+        margin-bottom: 30px;
+    }
+
+    .login-header h1 {
+        color: #333;
+        font-size: 28px;
+        margin-bottom: 8px;
+    }
+
+    .login-header p {
+        color: #666;
+        font-size: 14px;
+    }
+
+    .login-form {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+    }
+
+    .form-group {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .form-group label {
+        color: #333;
+        font-weight: 600;
+        font-size: 14px;
+    }
+
+    .form-control {
+        padding: 12px;
+        border: 2px solid #e0e0e0;
+        border-radius: 8px;
+        font-size: 16px;
+        transition: border-color 0.3s;
+    }
+
+    .form-control:focus {
+        outline: none;
+        border-color: #667eea;
+    }
+
+    .btn {
+        padding: 14px;
+        border: none;
+        border-radius: 8px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.3s;
+    }
+
+    .btn-primary {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+    }
+
+    .btn-primary:hover:not(:disabled) {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+    }
+
+    .btn-primary:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+    }
+
+    .alert {
+        padding: 12px;
+        border-radius: 8px;
+        font-size: 14px;
+    }
+
+    .alert-danger {
+        background-color: #fee;
+        color: #c33;
+        border: 1px solid #fcc;
+    }
+
+    .login-footer {
+        margin-top: 24px;
+        text-align: center;
+    }
+
+    .login-footer p {
+        color: #999;
+        font-size: 12px;
+    }
+</style>
+
+@code {
+    private LoginModel loginModel = new();
+    private string errorMessage = string.Empty;
+    private bool isLoading = false;
+
+    protected override void OnInitialized()
+    {
+        // Suscribirse a cambios de estado de autenticación
+        AuthState.OnAuthStateChanged += HandleAuthStateChanged;
+
+        // Verificar estado inicial
+        CheckAuthAndRedirect();
+    }
+
+    public void Dispose()
+    {
+        // Desuscribirse cuando se destruya el componente
+        AuthState.OnAuthStateChanged -= HandleAuthStateChanged;
+    }
+
+    private void HandleAuthStateChanged()
+    {
+        // Solo verificar y redirigir, no llamar StateHasChanged aquí
+        CheckAuthAndRedirect();
+    }
+
+    private void CheckAuthAndRedirect()
+    {
+        // Si ya está autenticado, navegar al dashboard
+        if (AuthState.IsAuthenticated)
+        {
+            Navigation.NavigateTo("/", forceLoad: true);
+        }
+    }
+
+    private async Task HandleLogin()
+    {
+        isLoading = true;
+        errorMessage = string.Empty;
+
+        var result = await ApiService.LoginAsync(loginModel.Username, loginModel.Password);
+
+        if (result != null && !string.IsNullOrEmpty(result.Token))
+        {
+            // Verificar que sea admin
+            if (result.User?.Role != "Admin")
+            {
+                errorMessage = "Acceso denegado. Solo administradores pueden acceder.";
+                isLoading = false;
+                return;
+            }
+
+            // Guardar estado de autenticación
+            // Esto dispara OnAuthStateChanged, que llama a HandleAuthStateChanged,
+            // que a su vez llama a CheckAuthAndRedirect para navegar
+            AuthState.SetAuthenticated(result.User.Name, result.User.Role);
+
+            // No navegamos aquí - dejamos que HandleAuthStateChanged lo haga
+        }
+        else
+        {
+            errorMessage = "Credenciales incorrectas. Verifique usuario y contraseña.";
+            isLoading = false;
+        }
+    }
+
+    private class LoginModel
+    {
+        public string Username { get; set; } = string.Empty;
+        public string Password { get; set; } = string.Empty;
+    }
+}

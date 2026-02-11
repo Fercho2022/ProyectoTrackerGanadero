@@ -1,0 +1,1153 @@
+@page "/users"
+@using AdminPanelLicenses.Services
+@inject AdminApiService ApiService
+@inject AuthStateService AuthState
+@inject NavigationManager Navigation
+@rendermode InteractiveServer
+@implements IDisposable
+
+<PageTitle>Gestión de Usuarios - Admin Panel</PageTitle>
+
+@if (!AuthState.IsAuthenticated)
+{
+    <p>Redirigiendo a login...</p>
+}
+else
+{
+    <div class="users-container">
+        <div class="page-header">
+            <div>
+                <h1>👥 Gestión de Usuarios y Licencias</h1>
+                <p>Administra usuarios, genera y revoca licencias</p>
+            </div>
+            <div class="header-actions">
+                <button class="btn btn-secondary" @onclick='() => Navigation.NavigateTo("/")'>
+                    ← Volver al Dashboard
+                </button>
+                <button class="btn btn-primary" @onclick="LoadUsers">
+                    🔄 Actualizar
+                </button>
+            </div>
+        </div>
+
+        @if (isLoading)
+        {
+            <div class="loading-container">
+                <div class="spinner"></div>
+                <p>Cargando usuarios...</p>
+            </div>
+        }
+        else if (users != null && users.Any())
+        {
+            <div class="table-container">
+                <table class="users-table">
+                    <thead>
+                        <tr>
+                            <th>Usuario</th>
+                            <th>Email</th>
+                            <th>Compañía</th>
+                            <th>Licencia</th>
+                            <th>Estado</th>
+                            <th>Expira</th>
+                            <th>Trackers</th>
+                            <th>Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var user in users)
+                        {
+                            <tr class="@(user.IsTrial ? "trial-row" : user.IsExpired ? "expired-row" : "")">
+                                <td>
+                                    <div class="user-info">
+                                        <strong>@user.Username</strong>
+                                        @if (user.Role == "Admin")
+                                        {
+                                            <span class="badge badge-admin">Admin</span>
+                                        }
+                                    </div>
+                                </td>
+                                <td>@user.Email</td>
+                                <td>@(user.CompanyName ?? "-")</td>
+                                <td>
+                                    @if (user.HasLicense)
+                                    {
+                                        <span class="license-type @GetLicenseClass(user.LicenseType)">
+                                            @user.LicenseType
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        <span class="no-license">Sin licencia</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (user.IsTrial)
+                                    {
+                                        <span class="status-badge trial">Trial</span>
+                                    }
+                                    else if (user.IsExpired)
+                                    {
+                                        <span class="status-badge expired">Expirada</span>
+                                    }
+                                    else if (user.HasLicense)
+                                    {
+                                        <span class="status-badge active">Activa</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="status-badge inactive">Sin licencia</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (user.ExpiresAt.HasValue)
+                                    {
+                                        <div class="expiration-info">
+                                            <div>@user.ExpiresAt.Value.ToString("dd/MM/yyyy")</div>
+                                            @if (user.DaysRemaining.HasValue)
+                                            {
+                                                <small class="@(user.DaysRemaining < 7 ? "days-warning" : "days-info")">
+                                                    (@user.DaysRemaining días)
+                                                </small>
+                                            }
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <span>-</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (user.HasLicense)
+                                    {
+                                        <span>@user.ActiveTrackers / @user.MaxTrackers</span>
+                                    }
+                                    else
+                                    {
+                                        <span>-</span>
+                                    }
+                                </td>
+                                <td>
+                                    <div class="action-buttons">
+                                        <button class="btn-icon btn-success"
+                                                @onclick="() => ShowGenerateLicenseModal(user)"
+                                                title="Generar/Actualizar licencia">
+                                            ➕
+                                        </button>
+                                        @if (user.CustomerId.HasValue && user.LicenseId.HasValue)
+                                        {
+                                            <button class="btn-icon btn-danger"
+                                                    @onclick="() => ShowDeleteLicenseConfirmation(user)"
+                                                    title="Eliminar todas las licencias del usuario">
+                                                🗑️
+                                            </button>
+                                        }
+                                    </div>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        else
+        {
+            <div class="no-data">
+                <p>📭 No hay usuarios registrados</p>
+            </div>
+        }
+
+        @if (showModal)
+        {
+            <div class="modal-overlay" @onclick="CloseModal">
+                <div class="modal-content" @onclick:stopPropagation="true">
+                    <div class="modal-header">
+                        <h2>🎫 Generar Licencia</h2>
+                        <button class="btn-close" @onclick="CloseModal">✖</button>
+                    </div>
+
+                    <div class="modal-body">
+                        <div class="user-summary">
+                            <p><strong>Usuario:</strong> @selectedUser?.Username</p>
+                            <p><strong>Email:</strong> @selectedUser?.Email</p>
+                        </div>
+
+                        <EditForm Model="@licenseRequest" OnValidSubmit="@GenerateLicense" class="license-form">
+                            <div class="form-group">
+                                <label>Tipo de Licencia</label>
+                                <select @bind="licenseRequest.LicenseType" class="form-control">
+                                    <option value="Trial">Trial (5 trackers, 1 granja, 30 días)</option>
+                                    <option value="Basic">Basic (20 trackers, 3 granjas)</option>
+                                    <option value="Premium">Premium (100 trackers, 15 granjas)</option>
+                                    <option value="Enterprise">Enterprise (Ilimitado)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Duración</label>
+                                <select @bind="licenseRequest.DurationMonths" class="form-control">
+                                    <option value="1">1 mes</option>
+                                    <option value="3">3 meses</option>
+                                    <option value="6">6 meses</option>
+                                    <option value="12">1 año</option>
+                                    <option value="-1">Permanente (100 años)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-group">
+                                <label>Nombre de Compañía (opcional)</label>
+                                <input type="text" @bind="licenseRequest.CompanyName"
+                                       class="form-control"
+                                       placeholder="Ej: Estancia San José" />
+                            </div>
+
+                            @if (!string.IsNullOrEmpty(errorMessage))
+                            {
+                                <div class="alert alert-danger">
+                                    @errorMessage
+                                </div>
+                            }
+
+                            @if (!string.IsNullOrEmpty(generatedLicenseKey))
+                            {
+                                <div class="alert alert-success">
+                                    <p><strong>✅ Licencia generada exitosamente!</strong></p>
+                                    <div class="license-key-display">
+                                        <code>@generatedLicenseKey</code>
+                                        <button type="button" class="btn-copy" @onclick="CopyLicenseKey">
+                                            📋 Copiar
+                                        </button>
+                                    </div>
+                                    <p class="hint">Envía esta clave al usuario por email</p>
+                                </div>
+                            }
+
+                            <div class="modal-actions">
+                                <button type="button" class="btn btn-secondary" @onclick="CloseModal">
+                                    Cancelar
+                                </button>
+                                <button type="submit" class="btn btn-primary" disabled="@isGenerating">
+                                    @if (isGenerating)
+                                    {
+                                        <span>Generando...</span>
+                                    }
+                                    else
+                                    {
+                                        <span>Generar Licencia</span>
+                                    }
+                                </button>
+                            </div>
+                        </EditForm>
+                    </div>
+                </div>
+            </div>
+        }
+
+        @if (showDeleteConfirmation)
+        {
+            <div class="modal-overlay" @onclick="CancelDelete">
+                <div class="modal-content modal-confirm-modern" @onclick:stopPropagation="true">
+                    <button class="btn-close-modern" @onclick="CancelDelete">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                    </button>
+
+                    <div class="modal-icon-container">
+                        <div class="modal-icon-danger">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <line x1="12" y1="8" x2="12" y2="12"></line>
+                                <line x1="12" y1="16" x2="12.01" y2="16"></line>
+                            </svg>
+                        </div>
+                    </div>
+
+                    <div class="modal-body-modern">
+                        <h2 class="modal-title-modern">¿Eliminar esta licencia?</h2>
+                        <p class="modal-subtitle">Esta acción eliminará permanentemente la licencia de:</p>
+
+                        <div class="user-card-delete">
+                            <div class="user-card-row">
+                                <span class="user-card-label">Usuario</span>
+                                <span class="user-card-value">@userToDelete?.Username</span>
+                            </div>
+                            <div class="user-card-row">
+                                <span class="user-card-label">Email</span>
+                                <span class="user-card-value">@userToDelete?.Email</span>
+                            </div>
+                            <div class="user-card-row">
+                                <span class="user-card-label">Licencia</span>
+                                <span class="user-card-value user-card-badge">@userToDelete?.LicenseType</span>
+                            </div>
+                        </div>
+
+                        <div class="warning-box">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                                <line x1="12" y1="9" x2="12" y2="13"></line>
+                                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+                            </svg>
+                            <span>El usuario NO podrá acceder a las funciones de trackers hasta que se le asigne una nueva licencia.</span>
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(errorMessage))
+                        {
+                            <div class="alert alert-danger mt-3">
+                                @errorMessage
+                            </div>
+                        }
+                    </div>
+
+                    <div class="modal-actions-modern">
+                        <button type="button" class="btn-cancel-modern" @onclick="CancelDelete" disabled="@isDeleting">
+                            Cancelar
+                        </button>
+                        <button type="button" class="btn-delete-modern" @onclick="DeleteLicense" disabled="@isDeleting">
+                            @if (isDeleting)
+                            {
+                                <span class="spinner-delete"></span>
+                                <span>Eliminando...</span>
+                            }
+                            else
+                            {
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="3 6 5 6 21 6"></polyline>
+                                    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                    <line x1="10" y1="11" x2="10" y2="17"></line>
+                                    <line x1="14" y1="11" x2="14" y2="17"></line>
+                                </svg>
+                                <span>Eliminar Licencia</span>
+                            }
+                        </button>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+
+    <style>
+        .users-container {
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .page-header h1 {
+            font-size: 28px;
+            color: #333;
+            margin: 0;
+        }
+
+        .page-header p {
+            color: #666;
+            margin: 4px 0 0 0;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 12px;
+        }
+
+        .table-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            overflow-x: auto;
+        }
+
+        .users-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .users-table thead {
+            background: #f8f9fa;
+        }
+
+        .users-table th {
+            padding: 16px 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #333;
+            font-size: 14px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .users-table td {
+            padding: 16px 12px;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 14px;
+        }
+
+        .users-table tr:hover {
+            background: #f8f9fa;
+        }
+
+        .trial-row {
+            background: #fff8e1 !important;
+        }
+
+        .expired-row {
+            background: #ffebee !important;
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .badge-admin {
+            background: #667eea;
+            color: white;
+        }
+
+        .license-type {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 16px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .license-type.trial {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .license-type.basic {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .license-type.premium {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .license-type.enterprise {
+            background: #e2d5f5;
+            color: #5a27a0;
+        }
+
+        .no-license {
+            color: #999;
+            font-style: italic;
+        }
+
+        .status-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .status-badge.active {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-badge.trial {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-badge.expired {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .status-badge.inactive {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+
+        .expiration-info small {
+            display: block;
+            font-size: 11px;
+        }
+
+        .days-warning {
+            color: #d9534f;
+            font-weight: 600;
+        }
+
+        .days-info {
+            color: #666;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn-icon {
+            width: 32px;
+            height: 32px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .btn-icon:hover {
+            transform: scale(1.1);
+        }
+
+        .btn-success {
+            background: #48bb78;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #f56565;
+            color: white;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 8px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-primary:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .btn-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #d0d0d0;
+        }
+
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+            width: 90%;
+            max-width: 600px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 24px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 24px;
+            color: #333;
+        }
+
+        .btn-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #666;
+            transition: color 0.2s;
+        }
+
+        .btn-close:hover {
+            color: #333;
+        }
+
+        .modal-body {
+            padding: 24px;
+        }
+
+        .user-summary {
+            background: #f8f9fa;
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .user-summary p {
+            margin: 4px 0;
+            color: #333;
+        }
+
+        .license-form {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .form-group label {
+            font-weight: 600;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .form-control {
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .alert {
+            padding: 16px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-danger {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .license-key-display {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin: 12px 0;
+            background: white;
+            padding: 12px;
+            border-radius: 8px;
+            border: 2px dashed #28a745;
+        }
+
+        .license-key-display code {
+            flex: 1;
+            font-size: 16px;
+            font-weight: bold;
+            color: #155724;
+        }
+
+        .btn-copy {
+            padding: 8px 16px;
+            background: #28a745;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+
+        .btn-copy:hover {
+            background: #218838;
+        }
+
+        .hint {
+            font-size: 12px;
+            color: #666;
+            margin-top: 8px;
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+
+        .loading-container {
+            text-align: center;
+            padding: 60px 20px;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @@keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .no-data {
+            background: white;
+            border-radius: 12px;
+            padding: 60px 20px;
+            text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        .no-data p {
+            font-size: 18px;
+            color: #666;
+        }
+
+        /* Modal de confirmación de eliminación - Diseño moderno */
+        .modal-confirm-modern {
+            max-width: 480px;
+            padding: 0;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            overflow: hidden;
+        }
+
+        .btn-close-modern {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: transparent;
+            border: none;
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            color: #64748b;
+            transition: all 0.2s;
+            z-index: 10;
+        }
+
+        .btn-close-modern:hover {
+            background: #f1f5f9;
+            color: #334155;
+        }
+
+        .modal-icon-container {
+            padding: 32px 32px 0 32px;
+            display: flex;
+            justify-content: center;
+        }
+
+        .modal-icon-danger {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #dc2626;
+            animation: scaleIn 0.3s ease-out;
+        }
+
+        @@keyframes scaleIn {
+            from {
+                transform: scale(0);
+                opacity: 0;
+            }
+            to {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        .modal-body-modern {
+            padding: 24px 32px 32px 32px;
+            text-align: center;
+        }
+
+        .modal-title-modern {
+            font-size: 22px;
+            font-weight: 700;
+            color: #1e293b;
+            margin: 0 0 8px 0;
+        }
+
+        .modal-subtitle {
+            font-size: 14px;
+            color: #64748b;
+            margin: 0 0 24px 0;
+        }
+
+        .user-card-delete {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 20px;
+            margin: 24px 0;
+            text-align: left;
+        }
+
+        .user-card-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .user-card-row:last-child {
+            border-bottom: none;
+        }
+
+        .user-card-label {
+            font-size: 13px;
+            font-weight: 500;
+            color: #64748b;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .user-card-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1e293b;
+        }
+
+        .user-card-badge {
+            background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+            color: #1e40af;
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        .warning-box {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            background: #fef3c7;
+            border: 1px solid #fde68a;
+            border-radius: 10px;
+            padding: 16px;
+            margin-top: 24px;
+            text-align: left;
+        }
+
+        .warning-box svg {
+            flex-shrink: 0;
+            color: #d97706;
+            margin-top: 2px;
+        }
+
+        .warning-box span {
+            font-size: 13px;
+            color: #92400e;
+            font-weight: 500;
+            line-height: 1.5;
+        }
+
+        .modal-actions-modern {
+            display: flex;
+            gap: 12px;
+            padding: 0 32px 32px 32px;
+        }
+
+        .btn-cancel-modern {
+            flex: 1;
+            padding: 12px 24px;
+            background: white;
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 14px;
+            color: #64748b;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-cancel-modern:hover:not(:disabled) {
+            background: #f8fafc;
+            border-color: #cbd5e1;
+            color: #475569;
+        }
+
+        .btn-cancel-modern:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-delete-modern {
+            flex: 1;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            border: none;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 14px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            box-shadow: 0 4px 6px -1px rgba(220, 38, 38, 0.2);
+        }
+
+        .btn-delete-modern:hover:not(:disabled) {
+            background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+            box-shadow: 0 6px 8px -1px rgba(220, 38, 38, 0.3);
+            transform: translateY(-1px);
+        }
+
+        .btn-delete-modern:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .btn-delete-modern:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .spinner-delete {
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @@keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+
+    @code {
+        private List<UserLicenseInfo>? users;
+        private bool isLoading = true;
+        private bool showModal = false;
+        private bool showDeleteConfirmation = false;
+        private UserLicenseInfo? selectedUser;
+        private UserLicenseInfo? userToDelete;
+        private GenerateLicenseRequest licenseRequest = new();
+        private string errorMessage = string.Empty;
+        private string generatedLicenseKey = string.Empty;
+        private bool isGenerating = false;
+        private bool isDeleting = false;
+
+        protected override async Task OnInitializedAsync()
+        {
+            // Suscribirse a cambios de estado de autenticación
+            AuthState.OnAuthStateChanged += StateHasChanged;
+
+            // Si no está autenticado, redirigir al login
+            if (!AuthState.IsAuthenticated)
+            {
+                Navigation.NavigateTo("/login", forceLoad: false);
+                return;
+            }
+
+            await LoadUsers();
+        }
+
+        public void Dispose()
+        {
+            // Desuscribirse cuando se destruya el componente
+            AuthState.OnAuthStateChanged -= StateHasChanged;
+        }
+
+        private async Task LoadUsers()
+        {
+            isLoading = true;
+            try
+            {
+                var response = await ApiService.GetAllUsersWithLicensesAsync();
+                users = response?.Users;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error loading users: {ex.Message}");
+            }
+            finally
+            {
+                isLoading = false;
+            }
+        }
+
+        private void ShowGenerateLicenseModal(UserLicenseInfo user)
+        {
+            selectedUser = user;
+            licenseRequest = new GenerateLicenseRequest
+            {
+                UserId = user.UserId,
+                LicenseType = "Basic",
+                DurationMonths = 12,
+                CompanyName = user.CompanyName
+            };
+            generatedLicenseKey = string.Empty;
+            errorMessage = string.Empty;
+            showModal = true;
+        }
+
+        private async Task GenerateLicense()
+        {
+            isGenerating = true;
+            errorMessage = string.Empty;
+            generatedLicenseKey = string.Empty;
+
+            try
+            {
+                var response = await ApiService.GenerateLicenseAsync(licenseRequest);
+
+                if (response?.Success == true && !string.IsNullOrEmpty(response.LicenseKey))
+                {
+                    generatedLicenseKey = response.LicenseKey;
+                    await LoadUsers(); // Recargar lista de usuarios
+                }
+                else
+                {
+                    errorMessage = response?.Message ?? "Error al generar la licencia";
+                }
+            }
+            catch (Exception ex)
+            {
+                errorMessage = $"Error: {ex.Message}";
+            }
+            finally
+            {
+                isGenerating = false;
+            }
+        }
+
+        private async Task CopyLicenseKey()
+        {
+            // En un escenario real, usarías JavaScript interop para copiar al portapapeles
+            // Por ahora, solo mostramos el mensaje
+            Console.WriteLine($"Licencia copiada: {generatedLicenseKey}");
+        }
+
+        private void CloseModal()
+        {
+            showModal = false;
+            selectedUser = null;
+            generatedLicenseKey = string.Empty;
+            errorMessage = string.Empty;
+        }
+
+        private void ShowDeleteLicenseConfirmation(UserLicenseInfo user)
+        {
+            userToDelete = user;
+            showDeleteConfirmation = true;
+        }
+
+        private void CancelDelete()
+        {
+            showDeleteConfirmation = false;
+            userToDelete = null;
+        }
+
+        private async Task DeleteLicense()
+        {
+            if (userToDelete == null || !userToDelete.LicenseId.HasValue)
+                return;
+
+            isDeleting = true;
+            try
+            {
+                // IMPORTANTE: Ahora usamos DeleteLicenseAsync para ELIMINAR FÍSICAMENTE de la base de datos
+                // Esto previene que claves eliminadas puedan ser reutilizadas
+                var success = await ApiService.DeleteLicenseAsync(userToDelete.LicenseId.Value);
+
+                if (success)
+                {
+                    // Recargar la lista de usuarios
+                    await LoadUsers();
+                    showDeleteConfirmation = false;
+                    userToDelete = null;
+                }
+                else
+                {
+                    errorMessage = "No se pudo eliminar la licencia de la base de datos";
+                }
+            }
+            catch (Exception ex)
+            {
+                errorMessage = $"Error eliminando licencia: {ex.Message}";
+            }
+            finally
+            {
+                isDeleting = false;
+            }
+        }
+
+        private string GetLicenseClass(string? licenseType)
+        {
+            return licenseType?.ToLower() switch
+            {
+                "trial" => "trial",
+                "basic" => "basic",
+                "premium" => "premium",
+                "enterprise" => "enterprise",
+                _ => ""
+            };
+        }
+    }
+}

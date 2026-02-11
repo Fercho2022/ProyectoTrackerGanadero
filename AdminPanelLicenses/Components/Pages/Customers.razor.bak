@@ -1,0 +1,290 @@
+@page "/customers"
+@inject AdminPanelLicenses.Services.TrackerManagementService TrackerService
+@using AdminPanelLicenses.Models
+
+<PageTitle>Clientes - Admin Panel</PageTitle>
+
+<h1 class="mb-4">👥 Gestión de Clientes</h1>
+
+@if (_loading)
+{
+    <div class="text-center my-5">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Cargando...</span>
+        </div>
+        <p class="mt-2">Cargando clientes...</p>
+    </div>
+}
+else if (_error != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <strong>Error:</strong> @_error
+        <button type="button" class="btn-close" @onclick="() => _error = null"></button>
+    </div>
+}
+
+@if (!_loading)
+{
+    <div class="row mb-3">
+        <div class="col-md-8">
+            <input type="text" class="form-control" placeholder="Buscar cliente..." @bind="_searchQuery" @bind:event="oninput" />
+        </div>
+        <div class="col-md-4 text-end">
+            <button class="btn btn-primary" @onclick="LoadCustomers">
+                <i class="bi bi-arrow-clockwise"></i> Actualizar
+            </button>
+        </div>
+    </div>
+
+    @if (_customers.Any())
+    {
+        var filteredCustomers = string.IsNullOrWhiteSpace(_searchQuery)
+            ? _customers
+            : _customers.Where(c =>
+                c.CompanyName.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase) ||
+                (c.ContactEmail?.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase) ?? false)
+            ).ToList();
+
+        <div class="alert alert-info">
+            Mostrando @filteredCustomers.Count de @_customers.Count clientes
+        </div>
+
+        <div class="row g-3">
+            @foreach (var customer in filteredCustomers)
+            {
+                <div class="col-md-6 col-lg-4">
+                    <div class="card h-100 @(customer.Status == "Active" ? "border-success" : "border-secondary")">
+                        <div class="card-header @(customer.Status == "Active" ? "bg-success" : "bg-secondary") text-white">
+                            <h6 class="mb-0">
+                                @customer.CompanyName
+                                @if (customer.Status == "Active")
+                                {
+                                    <span class="badge bg-light text-success float-end">Activo</span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-light text-secondary float-end">@customer.Status</span>
+                                }
+                            </h6>
+                        </div>
+                        <div class="card-body">
+                            <p class="mb-2">
+                                <small class="text-muted">Plan:</small>
+                                <br />
+                                <strong>@customer.Plan</strong>
+                            </p>
+                            <p class="mb-2">
+                                <small class="text-muted">Trackers:</small>
+                                <br />
+                                <span class="@(customer.ActiveTrackerCount >= customer.TrackerLimit ? "text-danger" : "text-success")">
+                                    <strong>@customer.ActiveTrackerCount</strong> / @customer.TrackerLimit
+                                </span>
+                                @if (customer.ActiveTrackerCount >= customer.TrackerLimit)
+                                {
+                                    <span class="badge bg-danger ms-1">Límite alcanzado</span>
+                                }
+                            </p>
+                            @if (!string.IsNullOrEmpty(customer.ContactEmail))
+                            {
+                                <p class="mb-2">
+                                    <small class="text-muted">Email:</small>
+                                    <br />
+                                    <small>@customer.ContactEmail</small>
+                                </p>
+                            }
+                            @if (customer.SubscriptionEnd.HasValue)
+                            {
+                                var daysLeft = (customer.SubscriptionEnd.Value - DateTime.UtcNow).Days;
+                                <p class="mb-2">
+                                    <small class="text-muted">Suscripción vence:</small>
+                                    <br />
+                                    <small class="@(daysLeft < 30 ? "text-danger" : "text-muted")">
+                                        @customer.SubscriptionEnd.Value.ToString("dd/MM/yyyy")
+                                        (@daysLeft días)
+                                    </small>
+                                </p>
+                            }
+                        </div>
+                        <div class="card-footer">
+                            <button class="btn btn-sm btn-primary w-100" @onclick="() => ViewCustomerTrackers(customer.Id)">
+                                <i class="bi bi-list-ul"></i> Ver Trackers (@customer.ActiveTrackerCount)
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+    else
+    {
+        <div class="alert alert-warning">
+            No se encontraron clientes en el sistema.
+        </div>
+    }
+}
+
+<!-- Modal para ver trackers del customer -->
+@if (_selectedCustomer != null)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        Trackers de @_selectedCustomer.CompanyName
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseModal"></button>
+                </div>
+                <div class="modal-body">
+                    @if (_loadingTrackers)
+                    {
+                        <div class="text-center py-4">
+                            <div class="spinner-border text-primary" role="status"></div>
+                            <p>Cargando trackers...</p>
+                        </div>
+                    }
+                    else if (_customerTrackers.Any())
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-striped">
+                                <thead>
+                                    <tr>
+                                        <th>Device ID</th>
+                                        <th>Estado</th>
+                                        <th>Batería</th>
+                                        <th>Asignado</th>
+                                        <th>Animal/Granja</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var tracker in _customerTrackers)
+                                    {
+                                        <tr>
+                                            <td>
+                                                <strong>@tracker.DeviceId</strong>
+                                                <br />
+                                                <small class="text-muted">@tracker.TrackerName</small>
+                                            </td>
+                                            <td>
+                                                @if (tracker.IsOnline)
+                                                {
+                                                    <span class="badge bg-success">Online</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="badge bg-secondary">Offline</span>
+                                                }
+                                            </td>
+                                            <td>
+                                                <span class="badge @GetBatteryClass(tracker.BatteryLevel)">
+                                                    @tracker.BatteryLevel%
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <small>@tracker.AssignedAt.ToString("dd/MM/yyyy")</small>
+                                            </td>
+                                            <td>
+                                                @if (!string.IsNullOrEmpty(tracker.AnimalName))
+                                                {
+                                                    <small>
+                                                        🐄 @tracker.AnimalName
+                                                        <br />
+                                                        <span class="text-muted">@tracker.FarmName</span>
+                                                    </small>
+                                                }
+                                                else
+                                                {
+                                                    <small class="text-muted">Sin asignar</small>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="alert alert-info">
+                            Este cliente no tiene trackers asignados.
+                        </div>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseModal">Cerrar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _loadingTrackers = false;
+    private string? _error = null;
+    private List<CustomerDto> _customers = new();
+    private List<CustomerTrackerDto> _customerTrackers = new();
+    private CustomerDto? _selectedCustomer = null;
+    private string _searchQuery = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadCustomers();
+    }
+
+    private async Task LoadCustomers()
+    {
+        try
+        {
+            _loading = true;
+            _error = null;
+            StateHasChanged();
+
+            _customers = await TrackerService.GetAllCustomersAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error al cargar clientes: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task ViewCustomerTrackers(int customerId)
+    {
+        try
+        {
+            _selectedCustomer = _customers.FirstOrDefault(c => c.Id == customerId);
+            _loadingTrackers = true;
+            _customerTrackers.Clear();
+            StateHasChanged();
+
+            _customerTrackers = await TrackerService.GetCustomerTrackersAsync(customerId);
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error al cargar trackers: {ex.Message}";
+        }
+        finally
+        {
+            _loadingTrackers = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CloseModal()
+    {
+        _selectedCustomer = null;
+        _customerTrackers.Clear();
+    }
+
+    private string GetBatteryClass(int batteryLevel)
+    {
+        if (batteryLevel > 50) return "bg-success";
+        if (batteryLevel > 20) return "bg-warning";
+        return "bg-danger";
+    }
+}

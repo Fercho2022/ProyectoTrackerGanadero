@@ -1,0 +1,330 @@
+@page "/assignments"
+@rendermode InteractiveServer
+@inject AdminPanelLicenses.Services.TrackerManagementService TrackerService
+@using AdminPanelLicenses.Models
+
+<PageTitle>Asignaciones - Admin Panel</PageTitle>
+
+<h1 class="mb-4">🔗 Asignaciones Activas</h1>
+
+@if (_loading)
+{
+    <div class="text-center my-5">
+        <div class="spinner-border text-primary" role="status">
+            <span class="visually-hidden">Cargando...</span>
+        </div>
+        <p class="mt-2">Cargando asignaciones...</p>
+    </div>
+}
+else if (_error != null)
+{
+    <div class="alert alert-danger alert-dismissible fade show">
+        <strong>Error:</strong> @_error
+        <button type="button" class="btn-close" @onclick="() => _error = null"></button>
+    </div>
+}
+
+@if (_successMessage != null)
+{
+    <div class="alert alert-success alert-dismissible fade show">
+        <strong>Éxito:</strong> @_successMessage
+        <button type="button" class="btn-close" @onclick="() => _successMessage = null"></button>
+    </div>
+}
+
+@if (!_loading)
+{
+    <div class="row mb-3">
+        <div class="col-md-8">
+            <input type="text" class="form-control" placeholder="Buscar por device ID, cliente o animal..." @bind="_searchQuery" @bind:event="oninput" />
+        </div>
+        <div class="col-md-4 text-end">
+            <button class="btn btn-primary" @onclick="LoadAssignments">
+                <i class="bi bi-arrow-clockwise"></i> Actualizar
+            </button>
+        </div>
+    </div>
+
+    @if (_assignments.Any())
+    {
+        var filteredAssignments = string.IsNullOrWhiteSpace(_searchQuery)
+            ? _assignments
+            : _assignments.Where(a =>
+                a.DeviceId.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase) ||
+                a.CustomerName.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase) ||
+                (a.AnimalName?.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase) ?? false)
+            ).ToList();
+
+        <div class="alert alert-info">
+            Mostrando @filteredAssignments.Count de @_assignments.Count asignaciones activas
+        </div>
+
+        <div class="table-responsive">
+            <table class="table table-striped table-hover">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Device ID</th>
+                        <th>Cliente</th>
+                        <th>Plan</th>
+                        <th>Estado</th>
+                        <th>Animal</th>
+                        <th>Granja</th>
+                        <th>Batería</th>
+                        <th>Asignado</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var assignment in filteredAssignments)
+                    {
+                        <tr>
+                            <td>
+                                <strong>@assignment.DeviceId</strong>
+                                <br />
+                                <small class="text-muted">@assignment.TrackerName</small>
+                            </td>
+                            <td>
+                                <strong>@assignment.CustomerName</strong>
+                            </td>
+                            <td>
+                                <span class="badge bg-info">@assignment.CustomerPlan</span>
+                            </td>
+                            <td>
+                                @if (assignment.IsOnline)
+                                {
+                                    <span class="badge bg-success">
+                                        <i class="bi bi-wifi"></i> Online
+                                    </span>
+                                }
+                                else
+                                {
+                                    <span class="badge bg-secondary">
+                                        <i class="bi bi-wifi-off"></i> Offline
+                                    </span>
+                                }
+                            </td>
+                            <td>
+                                @if (!string.IsNullOrEmpty(assignment.AnimalName))
+                                {
+                                    <span>🐄 @assignment.AnimalName</span>
+                                }
+                                else
+                                {
+                                    <small class="text-muted">Sin asignar</small>
+                                }
+                            </td>
+                            <td>
+                                @if (!string.IsNullOrEmpty(assignment.FarmName))
+                                {
+                                    <small>@assignment.FarmName</small>
+                                }
+                                else
+                                {
+                                    <small class="text-muted">-</small>
+                                }
+                            </td>
+                            <td>
+                                <span class="badge @GetBatteryClass(assignment.BatteryLevel)">
+                                    @assignment.BatteryLevel%
+                                </span>
+                            </td>
+                            <td>
+                                <small>@assignment.AssignedAt.ToString("dd/MM/yyyy")</small>
+                            </td>
+                            <td>
+                                <button class="btn btn-sm btn-danger"
+                                        @onclick="() => ShowUnassignModal(assignment)"
+                                        title="Desasignar tracker">
+                                    <i class="bi bi-x-circle"></i>
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Resumen de asignaciones por cliente -->
+        <div class="row mt-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">📊 Resumen por Cliente</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            @{
+                                var groupedByCustomer = filteredAssignments
+                                    .GroupBy(a => new { a.CustomerName, a.CustomerPlan })
+                                    .OrderByDescending(g => g.Count())
+                                    .ToList();
+                            }
+
+                            @foreach (var group in groupedByCustomer)
+                            {
+                                <div class="col-md-4 col-lg-3 mb-3">
+                                    <div class="card border-primary">
+                                        <div class="card-body">
+                                            <h6 class="card-title">@group.Key.CustomerName</h6>
+                                            <p class="mb-1">
+                                                <span class="badge bg-info">@group.Key.CustomerPlan</span>
+                                            </p>
+                                            <p class="mb-0">
+                                                <strong class="text-primary">@group.Count()</strong> trackers
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+    else
+    {
+        <div class="alert alert-warning">
+            No hay asignaciones activas en el sistema.
+        </div>
+    }
+}
+
+<!-- Modal de confirmación para desasignar -->
+@if (_showUnassignModal && _selectedAssignment != null)
+{
+    <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title">⚠️ Confirmar Desasignación</h5>
+                    <button type="button" class="btn-close btn-close-white" @onclick="CloseUnassignModal"></button>
+                </div>
+                <div class="modal-body">
+                    <p>¿Estás seguro de que deseas desasignar este tracker?</p>
+                    <div class="alert alert-warning">
+                        <strong>Tracker:</strong> @_selectedAssignment.DeviceId<br />
+                        <strong>Cliente:</strong> @_selectedAssignment.CustomerName<br />
+                        @if (!string.IsNullOrEmpty(_selectedAssignment.AnimalName))
+                        {
+                            <strong>Animal:</strong> @_selectedAssignment.AnimalName <br />
+                        }
+                    </div>
+                    <p class="mb-0">
+                        <small class="text-muted">
+                            Esta acción marcará el tracker como disponible nuevamente y podrá ser asignado a otro cliente.
+                        </small>
+                    </p>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" @onclick="CloseUnassignModal">Cancelar</button>
+                    <button type="button" class="btn btn-danger"
+                            @onclick="UnassignTracker"
+                            disabled="@_unassigning">
+                        @if (_unassigning)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1"></span>
+                            <text>Desasignando...</text>
+                        }
+                        else
+                        {
+                            <text>Desasignar Tracker</text>
+                        }
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private bool _loading = true;
+    private bool _unassigning = false;
+    private string? _error = null;
+    private string? _successMessage = null;
+    private string _searchQuery = "";
+
+    private List<CustomerTrackerDto> _assignments = new();
+    private bool _showUnassignModal = false;
+    private CustomerTrackerDto? _selectedAssignment = null;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAssignments();
+    }
+
+    private async Task LoadAssignments()
+    {
+        try
+        {
+            _loading = true;
+            _error = null;
+            StateHasChanged();
+
+            _assignments = await TrackerService.GetAllAssignmentsAsync();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error al cargar asignaciones: {ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void ShowUnassignModal(CustomerTrackerDto assignment)
+    {
+        _selectedAssignment = assignment;
+        _showUnassignModal = true;
+    }
+
+    private void CloseUnassignModal()
+    {
+        _showUnassignModal = false;
+        _selectedAssignment = null;
+    }
+
+    private async Task UnassignTracker()
+    {
+        if (_selectedAssignment == null) return;
+
+        try
+        {
+            _unassigning = true;
+            _error = null;
+            _successMessage = null;
+            StateHasChanged();
+
+            var result = await TrackerService.UnassignTrackerAsync(_selectedAssignment.Id);
+
+            if (result.success)
+            {
+                _successMessage = result.message;
+                CloseUnassignModal();
+                await LoadAssignments();
+            }
+            else
+            {
+                _error = result.message;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = $"Error al desasignar tracker: {ex.Message}";
+        }
+        finally
+        {
+            _unassigning = false;
+            StateHasChanged();
+        }
+    }
+
+    private string GetBatteryClass(int batteryLevel)
+    {
+        if (batteryLevel > 50) return "bg-success";
+        if (batteryLevel > 20) return "bg-warning";
+        return "bg-danger";
+    }
+}
