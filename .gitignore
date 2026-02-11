@@ -1,0 +1,66 @@
+# Visual Studio
+.vs/
+.vscode/
+*.user
+*.suo
+*.cache
+
+# Build results
+[Dd]ebug/
+[Rr]elease/
+[Bb]in/
+[Oo]bj/
+x64/
+x86/
+[Aa]rm/
+[Aa]rm64/
+bld/
+[Ll]og/
+[Ll]ogs/
+
+# .NET
+*.dll
+*.exe
+*.pdb
+*.nupkg
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Maui specific
+*.apk
+*.aab
+*.ipa
+*.app
+*.dSYM.zip
+*.dSYM
+
+# User-specific files
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Configuration files with sensitive data
+appsettings.Development.json
+appsettings.*.json
+!appsettings.json
+launchSettings.json
+
+# Claude files
+.claude/
+
+# Office files
+*.xlsm
+*.xlsx
+*.xls
+*.doc
+*.docx
+
+# PDFs
+*.pdf
+
+# Temporary files
+nul
+*.tmp
+*.temp
