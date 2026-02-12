@@ -1,0 +1,621 @@
+@page "/reports"
+@using TrackerGanaderoBlazorHibridMaui.Models
+@using TrackerGanaderoBlazorHibridMaui.Services
+@inject AnimalService AnimalService
+@inject FarmService FarmService
+@inject TrackingService TrackingService
+@inject AlertService AlertService
+
+<div class="container-fluid">
+    <!-- Page Header -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h2 class="mb-1">📊 Reportes y Análisis</h2>
+                    <p class="text-muted">Análisis estadístico y reportes del ganado</p>
+                </div>
+                <div class="d-flex gap-2">
+                    <select class="form-select">
+                        <option value="7">Últimos 7 días</option>
+                        <option value="30" selected>Últimos 30 días</option>
+                        <option value="90">Últimos 90 días</option>
+                        <option value="365">Último año</option>
+                    </select>
+                    <button class="btn btn-outline-primary" @onclick="RefreshReports">
+                        <i class="fas fa-sync-alt"></i> Actualizar
+                    </button>
+                    <button class="btn btn-success" @onclick="ExportReports">
+                        <i class="fas fa-download"></i> Exportar
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card bg-primary text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h4 class="mb-0">@_totalAnimals</h4>
+                            <p class="mb-0">Total Animales</p>
+                        </div>
+                        <i class="fas fa-cow fa-2x"></i>
+                    </div>
+                    <div class="mt-2">
+                        <small>
+                            @_newAnimalsThisPeriod nuevos en el período
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-info text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h4 class="mb-0">@_averageWeight.ToString("F1") kg</h4>
+                            <p class="mb-0">Peso Promedio</p>
+                        </div>
+                        <i class="fas fa-weight fa-2x"></i>
+                    </div>
+                    <div class="mt-2">
+                        <small>
+                            Rango: @_minWeight.ToString("F1") - @_maxWeight.ToString("F1") kg
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-warning text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h4 class="mb-0">@_totalAlerts</h4>
+                            <p class="mb-0">Alertas Generadas</p>
+                        </div>
+                        <i class="fas fa-exclamation-triangle fa-2x"></i>
+                    </div>
+                    <div class="mt-2">
+                        <small>
+                            @_resolvedAlerts resueltas (@((_resolvedAlerts * 100.0 / Math.Max(_totalAlerts, 1)).ToString("F1"))%)
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-success text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h4 class="mb-0">@_trackingCoverage.ToString("F1")%</h4>
+                            <p class="mb-0">Cobertura Tracking</p>
+                        </div>
+                        <i class="fas fa-satellite-dish fa-2x"></i>
+                    </div>
+                    <div class="mt-2">
+                        <small>
+                            @_animalsWithTrackers de @_totalAnimals animales
+                        </small>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Charts Row -->
+    <div class="row mb-4">
+        <!-- Animal Distribution by Status -->
+        <div class="col-lg-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Distribución por Estado</h5>
+                </div>
+                <div class="card-body">
+                    @if (_statusDistribution?.Any() == true)
+                    {
+                        <div class="row">
+                            @foreach (var status in _statusDistribution)
+                            {
+                                <div class="col-6 mb-3">
+                                    <div class="d-flex align-items-center">
+                                        <div class="flex-shrink-0">
+                                            <div class="badge bg-@GetStatusColor(status.Key) rounded-pill"
+                                                 style="width: 20px; height: 20px;"></div>
+                                        </div>
+                                        <div class="ms-3">
+                                            <div class="fw-bold">@status.Value</div>
+                                            <div class="text-muted small">@status.Key</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center text-muted py-4">
+                            <i class="fas fa-chart-pie fa-2x mb-2"></i>
+                            <p>No hay datos para mostrar</p>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Breed Distribution -->
+        <div class="col-lg-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">Distribución por Raza</h5>
+                </div>
+                <div class="card-body">
+                    @if (_breedDistribution?.Any() == true)
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-sm">
+                                <thead>
+                                    <tr>
+                                        <th>Raza</th>
+                                        <th>Cantidad</th>
+                                        <th>Porcentaje</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var breed in _breedDistribution.OrderByDescending(b => b.Value))
+                                    {
+                                        <tr>
+                                            <td>@breed.Key</td>
+                                            <td>@breed.Value</td>
+                                            <td>
+                                                <div class="d-flex align-items-center">
+                                                    <div class="progress flex-grow-1 me-2" style="height: 8px;">
+                                                        <div class="progress-bar" style="width: @((breed.Value * 100.0 / _totalAnimals).ToString("F1"))%"></div>
+                                                    </div>
+                                                    <small>@((breed.Value * 100.0 / _totalAnimals).ToString("F1"))%</small>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center text-muted py-4">
+                            <i class="fas fa-chart-bar fa-2x mb-2"></i>
+                            <p>No hay datos para mostrar</p>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Detailed Reports -->
+    <div class="row">
+        <!-- Animal Health Report -->
+        <div class="col-lg-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">📋 Reporte de Salud</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-12">
+                            <div class="d-flex justify-content-between align-items-center p-2 border rounded">
+                                <div>
+                                    <div class="fw-bold text-success">Animales Saludables</div>
+                                    <small class="text-muted">Estado óptimo</small>
+                                </div>
+                                <div class="text-end">
+                                    <div class="fs-5 fw-bold">@_healthyAnimals</div>
+                                    <small class="text-muted">@((_healthyAnimals * 100.0 / Math.Max(_totalAnimals, 1)).ToString("F1"))%</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <div class="d-flex justify-content-between align-items-center p-2 border rounded">
+                                <div>
+                                    <div class="fw-bold text-warning">En Observación</div>
+                                    <small class="text-muted">Requiere monitoreo</small>
+                                </div>
+                                <div class="text-end">
+                                    <div class="fs-5 fw-bold">@_monitoringAnimals</div>
+                                    <small class="text-muted">@((_monitoringAnimals * 100.0 / Math.Max(_totalAnimals, 1)).ToString("F1"))%</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <div class="d-flex justify-content-between align-items-center p-2 border rounded">
+                                <div>
+                                    <div class="fw-bold text-danger">Enfermos</div>
+                                    <small class="text-muted">Requiere atención</small>
+                                </div>
+                                <div class="text-end">
+                                    <div class="fs-5 fw-bold">@_sickAnimals</div>
+                                    <small class="text-muted">@((_sickAnimals * 100.0 / Math.Max(_totalAnimals, 1)).ToString("F1"))%</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Activity Report -->
+        <div class="col-lg-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">🏃 Reporte de Actividad</h5>
+                </div>
+                <div class="card-body">
+                    <div class="row g-3">
+                        <div class="col-12">
+                            <div class="text-center mb-3">
+                                <div class="display-6 text-primary">@_activeTrackersCount</div>
+                                <small class="text-muted">Trackers Activos</small>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span>Última actualización promedio:</span>
+                                <span class="fw-bold">@_averageLastUpdate</span>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span>Animales en movimiento:</span>
+                                <span class="fw-bold text-success">@_movingAnimals</span>
+                            </div>
+                        </div>
+                        <div class="col-12">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <span>Animales estáticos:</span>
+                                <span class="fw-bold text-warning">@_staticAnimals</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Alerts Summary -->
+        <div class="col-lg-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">⚠️ Resumen de Alertas</h5>
+                </div>
+                <div class="card-body">
+                    @if (_alertsByType?.Any() == true)
+                    {
+                        <div class="row g-2">
+                            @foreach (var alertType in _alertsByType.OrderByDescending(a => a.Value))
+                            {
+                                <div class="col-12">
+                                    <div class="d-flex justify-content-between align-items-center p-2 border rounded">
+                                        <div>
+                                            <div class="fw-bold">@GetAlertTypeDisplayName(alertType.Key)</div>
+                                            <small class="text-muted">@alertType.Key</small>
+                                        </div>
+                                        <div class="text-end">
+                                            <span class="badge bg-warning">@alertType.Value</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center text-muted py-4">
+                            <i class="fas fa-shield-alt fa-2x mb-2"></i>
+                            <p>No hay alertas en el período</p>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Farm Comparison Table -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">🏡 Comparación por Granjas</h5>
+                </div>
+                <div class="card-body">
+                    @if (_farmComparison?.Any() == true)
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Granja</th>
+                                        <th>Total Animales</th>
+                                        <th>Con Trackers</th>
+                                        <th>Peso Promedio</th>
+                                        <th>Saludables</th>
+                                        <th>Alertas Activas</th>
+                                        <th>Última Actividad</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var farm in _farmComparison)
+                                    {
+                                        <tr>
+                                            <td><strong>@farm.FarmName</strong></td>
+                                            <td>@farm.TotalAnimals</td>
+                                            <td>
+                                                <span class="badge bg-info">@farm.AnimalsWithTrackers</span>
+                                                <small class="text-muted">(@((farm.AnimalsWithTrackers * 100.0 / Math.Max(farm.TotalAnimals, 1)).ToString("F0"))%)</small>
+                                            </td>
+                                            <td>@farm.AverageWeight.ToString("F1") kg</td>
+                                            <td>
+                                                <span class="badge bg-success">@farm.HealthyAnimals</span>
+                                                <small class="text-muted">(@((farm.HealthyAnimals * 100.0 / Math.Max(farm.TotalAnimals, 1)).ToString("F0"))%)</small>
+                                            </td>
+                                            <td>
+                                                @if (farm.ActiveAlerts > 0)
+                                                {
+                                                    <span class="badge bg-warning">@farm.ActiveAlerts</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="badge bg-success">0</span>
+                                                }
+                                            </td>
+                                            <td>
+                                                @if (farm.LastActivity.HasValue)
+                                                {
+                                                    <small class="text-muted">@farm.LastActivity.Value.ToString("dd/MM HH:mm")</small>
+                                                }
+                                                else
+                                                {
+                                                    <span class="text-muted">Sin datos</span>
+                                                }
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center text-muted py-4">
+                            <i class="fas fa-chart-line fa-3x mb-3"></i>
+                            <p>No hay datos de granjas para mostrar</p>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private int _daysPeriod = 30;
+    private bool _isLoading = true;
+
+    // Summary statistics
+    private int _totalAnimals = 0;
+    private int _newAnimalsThisPeriod = 0;
+    private decimal _averageWeight = 0;
+    private decimal _minWeight = 0;
+    private decimal _maxWeight = 0;
+    private int _totalAlerts = 0;
+    private int _resolvedAlerts = 0;
+    private decimal _trackingCoverage = 0;
+    private int _animalsWithTrackers = 0;
+
+    // Health statistics
+    private int _healthyAnimals = 0;
+    private int _monitoringAnimals = 0;
+    private int _sickAnimals = 0;
+
+    // Activity statistics
+    private int _activeTrackersCount = 0;
+    private string _averageLastUpdate = "Sin datos";
+    private int _movingAnimals = 0;
+    private int _staticAnimals = 0;
+
+    // Distributions
+    private Dictionary<string, int>? _statusDistribution;
+    private Dictionary<string, int>? _breedDistribution;
+    private Dictionary<string, int>? _alertsByType;
+
+    // Farm comparison
+    private List<FarmComparisonReport>? _farmComparison;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadReportsData();
+    }
+
+    private async Task LoadReportsData()
+    {
+        try
+        {
+            _isLoading = true;
+            StateHasChanged();
+
+            // Load basic animal data
+            var animals = await AnimalService.GetAnimalsAsync();
+            var farms = await FarmService.GetFarmsAsync();
+            var alerts = await AlertService.GetAlertsAsync();
+
+            CalculateBasicStatistics(animals, alerts);
+            CalculateHealthStatistics(animals);
+            CalculateDistributions(animals);
+            await CalculateActivityStatistics(animals);
+            CalculateAlertStatistics(alerts);
+            await CalculateFarmComparison(farms, animals);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading reports data: {ex.Message}");
+        }
+        finally
+        {
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void CalculateBasicStatistics(List<AnimalDto> animals, List<AlertDto> alerts)
+    {
+        _totalAnimals = animals.Count;
+        _animalsWithTrackers = animals.Count(a => a.TrackerId.HasValue);
+        _trackingCoverage = _totalAnimals > 0 ? (_animalsWithTrackers * 100.0m / _totalAnimals) : 0;
+
+        if (animals.Any())
+        {
+            _averageWeight = animals.Average(a => a.Weight);
+            _minWeight = animals.Min(a => a.Weight);
+            _maxWeight = animals.Max(a => a.Weight);
+        }
+
+        var periodStart = DateTime.Now.AddDays(-_daysPeriod);
+        _newAnimalsThisPeriod = animals.Count(a => a.Id > 0); // Simplified - would need created date
+
+        _totalAlerts = alerts.Count(a => a.CreatedAt >= periodStart);
+        _resolvedAlerts = alerts.Count(a => a.CreatedAt >= periodStart && a.IsResolved);
+    }
+
+    private void CalculateHealthStatistics(List<AnimalDto> animals)
+    {
+        _healthyAnimals = animals.Count(a => a.Status.ToLower() == "healthy");
+        _monitoringAnimals = animals.Count(a => a.Status.ToLower() == "monitoring");
+        _sickAnimals = animals.Count(a => a.Status.ToLower() == "sick");
+    }
+
+    private void CalculateDistributions(List<AnimalDto> animals)
+    {
+        _statusDistribution = animals
+            .GroupBy(a => a.Status)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        _breedDistribution = animals
+            .GroupBy(a => a.Breed)
+            .ToDictionary(g => g.Key, g => g.Count());
+    }
+
+    private async Task CalculateActivityStatistics(List<AnimalDto> animals)
+    {
+        _activeTrackersCount = animals.Count(a => a.TrackerId.HasValue && a.CurrentLocation != null);
+
+        var animalsWithLocation = animals.Where(a => a.CurrentLocation != null).ToList();
+        if (animalsWithLocation.Any())
+        {
+            var avgMinutesAgo = animalsWithLocation
+                .Average(a => (DateTime.Now - a.CurrentLocation!.Timestamp).TotalMinutes);
+            _averageLastUpdate = avgMinutesAgo < 60
+                ? $"{avgMinutesAgo:F0} min"
+                : $"{(avgMinutesAgo / 60):F1} h";
+        }
+
+        // Simplified movement detection - would need more sophisticated logic
+        _movingAnimals = animalsWithLocation.Count(a => a.CurrentLocation!.Speed > 0.5);
+        _staticAnimals = animalsWithLocation.Count(a => a.CurrentLocation!.Speed <= 0.5);
+    }
+
+    private void CalculateAlertStatistics(List<AlertDto> alerts)
+    {
+        var periodStart = DateTime.Now.AddDays(-_daysPeriod);
+        var periodAlerts = alerts.Where(a => a.CreatedAt >= periodStart).ToList();
+
+        _alertsByType = periodAlerts
+            .GroupBy(a => a.Type)
+            .ToDictionary(g => g.Key, g => g.Count());
+    }
+
+    private async Task CalculateFarmComparison(List<FarmDto> farms, List<AnimalDto> animals)
+    {
+        _farmComparison = new List<FarmComparisonReport>();
+
+        foreach (var farm in farms)
+        {
+            var farmAnimals = animals.Where(a => a.FarmId == farm.Id).ToList();
+            var farmReport = new FarmComparisonReport
+            {
+                FarmName = farm.Name,
+                TotalAnimals = farmAnimals.Count,
+                AnimalsWithTrackers = farmAnimals.Count(a => a.TrackerId.HasValue),
+                AverageWeight = farmAnimals.Any() ? farmAnimals.Average(a => a.Weight) : 0,
+                HealthyAnimals = farmAnimals.Count(a => a.Status.ToLower() == "healthy"),
+                ActiveAlerts = 0, // Would need to load farm-specific alerts
+                LastActivity = farmAnimals
+                    .Where(a => a.CurrentLocation != null)
+                    .Select(a => a.CurrentLocation!.Timestamp)
+                    .DefaultIfEmpty()
+                    .Max()
+            };
+
+            _farmComparison.Add(farmReport);
+        }
+    }
+
+    private async Task OnDateRangeChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var days))
+        {
+            _daysPeriod = days;
+            await LoadReportsData();
+        }
+    }
+
+    private async Task RefreshReports()
+    {
+        await LoadReportsData();
+    }
+
+    private void ExportReports()
+    {
+        // TODO: Implement export functionality
+        Console.WriteLine("Export functionality to be implemented");
+    }
+
+    private string GetStatusColor(string status)
+    {
+        return status.ToLower() switch
+        {
+            "healthy" => "success",
+            "sick" => "danger",
+            "monitoring" => "warning",
+            _ => "secondary"
+        };
+    }
+
+    private string GetAlertTypeDisplayName(string type)
+    {
+        return type switch
+        {
+            "health" => "Salud",
+            "geofence" => "Geovalla",
+            "inactivity" => "Inactividad",
+            "breeding" => "Reproducción",
+            _ => type
+        };
+    }
+
+
+    public class FarmComparisonReport
+    {
+        public string FarmName { get; set; } = "";
+        public int TotalAnimals { get; set; }
+        public int AnimalsWithTrackers { get; set; }
+        public decimal AverageWeight { get; set; }
+        public int HealthyAnimals { get; set; }
+        public int ActiveAlerts { get; set; }
+        public DateTime? LastActivity { get; set; }
+    }
+}

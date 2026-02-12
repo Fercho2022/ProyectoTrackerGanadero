@@ -1,0 +1,80 @@
+﻿<div class="d-flex flex-column h-100 text-white p-3" style="width: 250px;">
+	<div class="mb-4">
+		<h5 class="text-center">🐄 Menu Principal</h5>
+	</div>
+
+	<nav class="flex-column">
+		<!-- Dashboard -->
+		<div class="nav-item mb-2">
+			<NavLink class="nav-link text-white d-flex align-items-center p-2 rounded" href="" Match="NavLinkMatch.All">
+				<i class="fas fa-tachometer-alt me-2"></i> Dashboard
+			</NavLink>
+		</div>
+
+		<!-- Mapa en Tiempo Real -->
+		<div class="nav-item mb-2">
+			<NavLink class="nav-link text-white d-flex align-items-center p-2 rounded" href="live-map">
+				<i class="fas fa-map-marked-alt me-2"></i> Mapa en Vivo
+			</NavLink>
+		</div>
+
+		<!-- Gestión de Granjas -->
+		<div class="nav-item mb-2">
+			<NavLink class="nav-link text-white d-flex align-items-center p-2 rounded" href="farms">
+				<i class="fas fa-home me-2"></i> Gestión de Granjas
+			</NavLink>
+		</div>
+
+		<!-- Gestión de Animales -->
+		<div class="nav-item mb-2">
+			<NavLink class="nav-link text-white d-flex align-items-center p-2 rounded" href="animals">
+				<i class="fas fa-cow me-2"></i> Animales
+			</NavLink>
+		</div>
+
+		<!-- Alertas -->
+		<div class="nav-item mb-2">
+			<NavLink class="nav-link text-white d-flex align-items-center p-2 rounded" href="alerts">
+				<i class="fas fa-exclamation-triangle me-2"></i> Alertas
+			</NavLink>
+		</div>
+
+		<!-- Control Sanitario -->
+		<div class="nav-item mb-2">
+			<NavLink class="nav-link text-white d-flex align-items-center p-2 rounded" href="health">
+				<i class="fas fa-stethoscope me-2"></i> Control Sanitario
+			</NavLink>
+		</div>
+
+		<!-- Inventario y Finanzas -->
+		<div class="nav-item mb-2">
+			<NavLink class="nav-link text-white d-flex align-items-center p-2 rounded" href="inventory">
+				<i class="fas fa-boxes me-2"></i> Inventario
+			</NavLink>
+		</div>
+
+		<!-- Reportes -->
+		<div class="nav-item mb-2">
+			<NavLink class="nav-link text-white d-flex align-items-center p-2 rounded" href="reports">
+				<i class="fas fa-chart-bar me-2"></i> Reportes
+			</NavLink>
+		</div>
+
+		<!-- Configuración -->
+		<div class="nav-item mb-2">
+			<NavLink class="nav-link text-white d-flex align-items-center p-2 rounded" href="settings">
+				<i class="fas fa-cog me-2"></i> Configuración
+			</NavLink>
+		</div>
+	</nav>
+</div>
+
+<style>
+	.nav-link:hover {
+		background-color: rgba(255, 255, 255, 0.1) !important;
+	}
+
+	.nav-link.active {
+		background-color: rgba(255, 255, 255, 0.2) !important;
+	}
+</style>

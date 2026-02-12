@@ -1,0 +1,364 @@
+@page "/register"
+@using TrackerGanaderoBlazorHibridMaui.Models
+@using TrackerGanaderoBlazorHibridMaui.Services
+@inject AuthService AuthService
+@inject NavigationManager Navigation
+
+<div class="container-fluid">
+    <div class="row justify-content-center">
+        <div class="col-md-6 col-lg-4">
+            <div class="card shadow">
+                <div class="card-body p-5">
+                    <div class="text-center mb-4">
+                        <h2 class="text-primary">🐄 Tracker Ganadero</h2>
+                        <p class="text-muted">Crea tu cuenta</p>
+                    </div>
+
+                    <EditForm Model="@_registerModel" OnValidSubmit="@HandleRegister">
+                        <DataAnnotationsValidator />
+
+                        <div class="mb-3">
+                            <label for="name" class="form-label">Nombre</label>
+                            <InputText id="name" class="form-control" @bind-Value="_registerModel.Name" placeholder="Ingresa tu nombre completo" />
+                            <ValidationMessage For="@(() => _registerModel.Name)" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="email" class="form-label">Email</label>
+                            <InputText id="email" type="email" class="form-control" @bind-Value="_registerModel.Email" placeholder="Ingresa tu email" />
+                            <ValidationMessage For="@(() => _registerModel.Email)" />
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="password" class="form-label">Contraseña</label>
+                            <input id="password" type="password" class="form-control @GetPasswordFieldClass()" value="@_registerModel.Password" @oninput="@((args) => OnPasswordInput(args))" placeholder="Ingresa tu contraseña" />
+                            <ValidationMessage For="@(() => _registerModel.Password)" />
+                            @if (!string.IsNullOrEmpty(_passwordValidationMessage))
+                            {
+                                <div class="text-danger small mt-1">@_passwordValidationMessage</div>
+                            }
+                        </div>
+
+                        <div class="mb-3">
+                            <label for="confirmPassword" class="form-label">Confirmar Contraseña</label>
+                            <input id="confirmPassword" type="password" class="form-control @GetConfirmPasswordFieldClass()" value="@_registerModel.ConfirmPassword" @oninput="@((args) => OnConfirmPasswordInput(args))" placeholder="Confirma tu contraseña" />
+                            <ValidationMessage For="@(() => _registerModel.ConfirmPassword)" />
+                            @if (!string.IsNullOrEmpty(_confirmPasswordValidationMessage))
+                            {
+                                <div class="text-danger small mt-1">@_confirmPasswordValidationMessage</div>
+                            }
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(_errorMessage))
+                        {
+                            <div class="alert alert-danger" role="alert">
+                                @_errorMessage
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrEmpty(_successMessage))
+                        {
+                            <div class="alert alert-success" role="alert">
+                                @_successMessage
+                            </div>
+                        }
+
+                        <div class="d-grid gap-2">
+                            <button type="submit" class="btn btn-success" disabled="@_isLoading">
+                                @if (_isLoading)
+                                {
+                                    <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                                }
+                                Registrarse
+                            </button>
+                        </div>
+                    </EditForm>
+
+                    <div class="text-center mt-4">
+                        <p class="text-muted">¿Ya tienes cuenta? <a href="/login" class="text-primary">Inicia Sesión</a></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private RegisterUserDto _registerModel = new RegisterUserDto
+    {
+        Name = string.Empty,
+        Email = string.Empty,
+        Password = string.Empty,
+        ConfirmPassword = string.Empty
+    };
+    private string _errorMessage = string.Empty;
+    private string _successMessage = string.Empty;
+    private bool _isLoading = false;
+    private string _passwordValidationMessage = string.Empty;
+    private string _confirmPasswordValidationMessage = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        // Check if already authenticated
+        if (await AuthService.IsAuthenticatedAsync())
+        {
+            Navigation.NavigateTo("/");
+        }
+    }
+
+    private async Task HandleRegister()
+    {
+        try
+        {
+            // Debug: Log form values
+            Console.WriteLine($"=== STARTING REGISTRATION ===");
+            Console.WriteLine($"Register form - Name: '{_registerModel.Name}', Email: '{_registerModel.Email}', Password length: {_registerModel.Password?.Length ?? 0}, ConfirmPassword length: {_registerModel.ConfirmPassword?.Length ?? 0}");
+
+            // Validate form manually if needed
+            if (string.IsNullOrWhiteSpace(_registerModel.Name))
+            {
+                _errorMessage = "El nombre es requerido";
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(_registerModel.Email))
+            {
+                _errorMessage = "El email es requerido";
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(_registerModel.Password))
+            {
+                _errorMessage = "La contraseña es requerida";
+                return;
+            }
+
+            if (_registerModel.Password.Length < 6)
+            {
+                _errorMessage = "La contraseña debe tener al menos 6 caracteres";
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(_registerModel.ConfirmPassword))
+            {
+                _errorMessage = "Debes confirmar la contraseña";
+                return;
+            }
+
+            if (_registerModel.Password != _registerModel.ConfirmPassword)
+            {
+                _errorMessage = "Las contraseñas no coinciden";
+                return;
+            }
+
+            Console.WriteLine($"=== VALIDATION PASSED, STARTING API CALL ===");
+
+            _isLoading = true;
+            _errorMessage = string.Empty;
+            _successMessage = string.Empty;
+            StateHasChanged();
+
+            // Create a clean DTO to avoid any binding issues
+            var registerDto = new RegisterUserDto
+            {
+                Name = (_registerModel?.Name ?? "").Trim(),
+                Email = (_registerModel?.Email ?? "").Trim().ToLower(),
+                Password = _registerModel?.Password ?? "",
+                ConfirmPassword = _registerModel?.ConfirmPassword ?? ""
+            };
+
+            Console.WriteLine($"=== STARTING REGISTRATION API CALL ===");
+
+            // Step 1: Try to register (ignore all errors - user might already be created)
+            try
+            {
+                await AuthService.RegisterAsync(registerDto);
+                Console.WriteLine($"=== REGISTRATION API CALL SUCCEEDED ===");
+            }
+            catch (HttpRequestException httpEx)
+            {
+                Console.WriteLine($"=== HTTP EXCEPTION DURING REGISTRATION: {httpEx.Message} ===");
+
+                // Check if it's because email already exists
+                if (httpEx.Message.Contains("Email already exists") || httpEx.Message.Contains("400"))
+                {
+                    _errorMessage = "Este email ya está registrado. Intenta con otro email o inicia sesión.";
+                    return; // Don't proceed with login if email exists
+                }
+                // For any other error, continue to try login (user might have been created)
+                Console.WriteLine($"=== IGNORING REGISTRATION ERROR, WILL TRY LOGIN ===");
+            }
+            catch (Exception regEx)
+            {
+                Console.WriteLine($"=== GENERAL EXCEPTION DURING REGISTRATION: {regEx.Message} ===");
+                // Ignore and try login anyway
+            }
+
+            // Step 2: Always try to login with the credentials
+            try
+            {
+                Console.WriteLine($"=== STARTING AUTO-LOGIN ===");
+                var loginDto = new LoginDto
+                {
+                    Username = registerDto.Email, // Login uses email now
+                    Password = registerDto.Password
+                };
+
+                var loginResult = await AuthService.LoginAsync(loginDto);
+
+                if (loginResult != null)
+                {
+                    Console.WriteLine($"=== LOGIN SUCCESSFUL ===");
+                    _successMessage = "¡Registro exitoso! Iniciando sesión...";
+                    StateHasChanged();
+
+                    await Task.Delay(1000);
+                    Navigation.NavigateTo("/", forceLoad: true);
+                    return; // Exit successfully
+                }
+                else
+                {
+                    Console.WriteLine($"=== LOGIN RETURNED NULL ===");
+                    _errorMessage = "Usuario creado, pero no se pudo iniciar sesión automáticamente. Por favor, inicia sesión manualmente.";
+                }
+            }
+            catch (Exception loginEx)
+            {
+                Console.WriteLine($"=== LOGIN EXCEPTION: {loginEx.Message} ===");
+                _errorMessage = "Usuario registrado. Por favor, inicia sesión manualmente desde la pantalla de login.";
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"=== OUTER EXCEPTION IN REGISTER ===");
+            Console.WriteLine($"Exception Type: {ex.GetType().Name}");
+            Console.WriteLine($"Exception Message: {ex.Message}");
+            Console.WriteLine($"Inner Exception: {ex.InnerException?.Message}");
+            Console.WriteLine($"Stack trace: {ex.StackTrace}");
+            Console.WriteLine($"=== END OUTER EXCEPTION ===");
+            _errorMessage = "Error al procesar el registro. Por favor, verifica que el servidor esté disponible.";
+        }
+        finally
+        {
+            Console.WriteLine($"=== REGISTRATION PROCESS FINISHED ===");
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private void OnPasswordInput(ChangeEventArgs args)
+    {
+        try
+        {
+            _registerModel.Password = args.Value?.ToString() ?? "";
+            ValidatePassword();
+            ValidatePasswordMatch();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in OnPasswordInput: {ex.Message}");
+        }
+    }
+
+    private void OnConfirmPasswordInput(ChangeEventArgs args)
+    {
+        try
+        {
+            _registerModel.ConfirmPassword = args.Value?.ToString() ?? "";
+            ValidatePassword();
+            ValidatePasswordMatch();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in OnConfirmPasswordInput: {ex.Message}");
+        }
+    }
+
+    private void ValidatePassword()
+    {
+        try
+        {
+            if (_registerModel?.Password == null || string.IsNullOrEmpty(_registerModel.Password))
+            {
+                _passwordValidationMessage = string.Empty;
+            }
+            else if (_registerModel.Password.Length < 6)
+            {
+                _passwordValidationMessage = "La contraseña debe tener al menos 6 caracteres";
+            }
+            else
+            {
+                _passwordValidationMessage = string.Empty;
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in ValidatePassword: {ex.Message}");
+            _passwordValidationMessage = string.Empty;
+        }
+    }
+
+    private void ValidatePasswordMatch()
+    {
+        try
+        {
+            if (_registerModel?.ConfirmPassword == null || string.IsNullOrEmpty(_registerModel.ConfirmPassword))
+            {
+                _confirmPasswordValidationMessage = string.Empty;
+            }
+            else if (_registerModel.Password != _registerModel.ConfirmPassword)
+            {
+                _confirmPasswordValidationMessage = "Las contraseñas no coinciden";
+                _passwordValidationMessage = "Las contraseñas no coinciden";
+            }
+            else
+            {
+                _confirmPasswordValidationMessage = string.Empty;
+                // Solo limpiar el mensaje de contraseña si no hay otros errores
+                if (_passwordValidationMessage == "Las contraseñas no coinciden")
+                {
+                    _passwordValidationMessage = string.Empty;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in ValidatePasswordMatch: {ex.Message}");
+            _confirmPasswordValidationMessage = string.Empty;
+        }
+    }
+
+    private string GetPasswordFieldClass()
+    {
+        try
+        {
+            if (_registerModel?.Password == null || string.IsNullOrEmpty(_registerModel.Password))
+                return "";
+
+            return !string.IsNullOrEmpty(_passwordValidationMessage) ? "is-invalid" : "is-valid";
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in GetPasswordFieldClass: {ex.Message}");
+            return "";
+        }
+    }
+
+    private string GetConfirmPasswordFieldClass()
+    {
+        try
+        {
+            if (_registerModel?.ConfirmPassword == null || string.IsNullOrEmpty(_registerModel.ConfirmPassword))
+                return "";
+
+            return !string.IsNullOrEmpty(_confirmPasswordValidationMessage) ? "is-invalid" : "is-valid";
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in GetConfirmPasswordFieldClass: {ex.Message}");
+            return "";
+        }
+    }
+}

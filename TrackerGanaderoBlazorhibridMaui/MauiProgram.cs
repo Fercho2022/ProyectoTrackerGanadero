@@ -1,0 +1,118 @@
+﻿using Microsoft.AspNetCore.Components.WebView.Maui;
+using TrackerGanaderoBlazorHibridMaui.Services;
+using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.Configuration;
+using System.Reflection;
+
+namespace TrackerGanaderoBlazorHibridMaui;
+
+public static class MauiProgram
+{
+	public static MauiApp CreateMauiApp()
+	{
+		var builder = MauiApp.CreateBuilder();
+		builder
+			.UseMauiApp<App>()
+			.ConfigureFonts(fonts =>
+			{
+				fonts.AddFont("OpenSans-Regular.ttf", "OpenSansRegular");
+				fonts.AddFont("FontAwesome.otf", "FontAwesome");
+			});
+
+		builder.Services.AddMauiBlazorWebView();
+#if DEBUG
+		builder.Services.AddBlazorWebViewDeveloperTools();
+#endif
+
+		// Configuration
+        var assembly = Assembly.GetExecutingAssembly();
+        using var stream = assembly.GetManifestResourceStream("TrackerGanaderoBlazorHibridMaui.appsettings.json");
+
+        if (stream != null)
+        {
+            var config = new ConfigurationBuilder()
+                .AddJsonStream(stream)
+                .Build();
+            builder.Configuration.AddConfiguration(config);
+        }
+
+		// HttpClient Configuration
+		var httpClientConfiguration = (HttpClient client) =>
+		{
+			try
+			{
+                var baseUrl = builder.Configuration["ApiSettings:BaseUrl"];
+				client.BaseAddress = new Uri(baseUrl);
+				client.DefaultRequestHeaders.Add("Accept", "application/json");
+				client.Timeout = TimeSpan.FromSeconds(30);
+			}
+			catch (Exception ex)
+			{
+				// Log error but don't crash the app
+				System.Diagnostics.Debug.WriteLine($"Error configuring HttpClient: {ex.Message}");
+			}
+		};
+
+		var httpMessageHandlerConfiguration = () =>
+		{
+			try
+			{
+#if WINDOWS
+				return new HttpClientHandler()
+				{
+					ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true
+				};
+#else
+				return new HttpClientHandler();
+#endif
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"Error creating HttpClientHandler: {ex.Message}");
+				return new HttpClientHandler();
+			}
+		};
+
+		// HttpClients for different services
+        builder.Services.AddTransient<AuthHeaderHandler>();
+
+		builder.Services.AddHttpClient<HttpService>(httpClientConfiguration)
+			.ConfigurePrimaryHttpMessageHandler(httpMessageHandlerConfiguration)
+            .AddHttpMessageHandler<AuthHeaderHandler>();
+
+		builder.Services.AddHttpClient<LicenseService>(httpClientConfiguration)
+			.ConfigurePrimaryHttpMessageHandler(httpMessageHandlerConfiguration)
+            .AddHttpMessageHandler<AuthHeaderHandler>();
+
+		builder.Services.AddHttpClient<TrackerManagementService>(httpClientConfiguration)
+			.ConfigurePrimaryHttpMessageHandler(httpMessageHandlerConfiguration)
+            .AddHttpMessageHandler<AuthHeaderHandler>();
+
+		// HttpClient for NavigationService (GraphHopper - no auth header needed)
+		builder.Services.AddHttpClient<NavigationService>()
+			.ConfigurePrimaryHttpMessageHandler(httpMessageHandlerConfiguration);
+
+		// Services
+		builder.Services.AddScoped<AuthService>();
+		builder.Services.AddSingleton<AnimalService>();
+		builder.Services.AddSingleton<HealthService>();
+		builder.Services.AddSingleton<SignalRService>();
+		builder.Services.AddSingleton<AlertService>();
+		builder.Services.AddSingleton<FarmService>();
+		builder.Services.AddSingleton<TrackingService>();
+		builder.Services.AddSingleton<FarmTrackerService>();
+		// NavigationService is already registered via AddHttpClient above (line 92-93)
+		// LicenseService and TrackerManagementService are already registered as HttpClient above
+        // SettingsStateService is new
+        builder.Services.AddSingleton<SettingsStateService>();
+
+		// Voice Navigation
+		builder.Services.AddSingleton<ITextToSpeech>(TextToSpeech.Default);
+		builder.Services.AddSingleton<VoiceNavigationService>();
+
+		// Additional Services
+
+		return builder.Build();
+	}
+
+}

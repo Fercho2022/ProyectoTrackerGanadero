@@ -1,0 +1,64 @@
+﻿@inherits LayoutComponentBase
+@using TrackerGanaderoBlazorHibridMaui.Services
+@inject AuthService AuthService
+@inject NavigationManager Navigation
+
+<div class="d-flex vh-100">
+	@if (_isAuthenticated)
+	{
+		<!-- Sidebar Navigation -->
+		<div class="bg-dark sidebar">
+			<NavMenu />
+		</div>
+
+		<!-- Main Content -->
+		<div class="flex-fill d-flex flex-column">
+			<!-- Top Header -->
+			<header class="bg-primary text-white p-3 d-flex justify-content-between align-items-center">
+				<h4 class="mb-0">🐄 Tracker Ganadero</h4>
+				<div class="d-flex align-items-center gap-3">
+					<span>@_currentUser?.FirstName @_currentUser?.LastName</span>
+					<button class="btn btn-outline-light btn-sm" @onclick="LogoutAsync">
+						<i class="fas fa-sign-out-alt"></i> Salir
+					</button>
+				</div>
+			</header>
+
+			<!-- Page Content -->
+			<main class="flex-fill overflow-auto p-3">
+				@Body
+			</main>
+		</div>
+	}
+	else
+	{
+		<!-- Login Layout -->
+		<div class="w-100 d-flex align-items-center justify-content-center bg-light">
+			@Body
+		</div>
+	}
+</div>
+
+@code {
+	private bool _isAuthenticated = false;
+	private UserDto? _currentUser;
+
+	protected override async Task OnInitializedAsync()
+	{
+		_isAuthenticated = await AuthService.IsAuthenticatedAsync();
+		if (_isAuthenticated)
+		{
+			_currentUser = await AuthService.GetCurrentUserAsync();
+		}
+		else
+		{
+			Navigation.NavigateTo("/login");
+		}
+	}
+
+	private async Task LogoutAsync()
+	{
+		await AuthService.LogoutAsync();
+		Navigation.NavigateTo("/login", forceLoad: true);
+	}
+}

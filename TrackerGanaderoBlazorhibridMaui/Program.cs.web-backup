@@ -1,0 +1,48 @@
+using TrackerGanaderoBlazorHibridMaui.Services;
+
+// Web mode when using dotnet run
+var builder = WebApplication.CreateBuilder(args);
+
+// Add services to the container.
+builder.Services.AddRazorPages();
+builder.Services.AddServerSideBlazor();
+
+// Configuration
+builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+{
+    ["ApiSettings:BaseUrl"] = "http://localhost:5190",
+    ["GoogleMaps:ApiKey"] = "AIzaSyAjKR-ToKKA54K2TSdrTPtyOPhQkjwxrHE"
+});
+
+// HttpClient
+builder.Services.AddHttpClient<HttpService>(client =>
+{
+    client.BaseAddress = new Uri("http://localhost:5190/");
+    client.DefaultRequestHeaders.Add("Accept", "application/json");
+});
+
+// Services
+builder.Services.AddSingleton<HttpService>();
+builder.Services.AddSingleton<AuthService>();
+builder.Services.AddSingleton<AnimalService>();
+builder.Services.AddSingleton<SignalRService>();
+builder.Services.AddSingleton<AlertService>();
+builder.Services.AddSingleton<FarmService>();
+builder.Services.AddSingleton<TrackingService>();
+
+var app = builder.Build();
+
+// Configure the HTTP request pipeline.
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler("/Error");
+    app.UseHsts();
+}
+
+app.UseHttpsRedirection();
+app.UseStaticFiles();
+app.UseRouting();
+app.MapBlazorHub();
+app.MapFallbackToPage("/_Host");
+
+app.Run();
