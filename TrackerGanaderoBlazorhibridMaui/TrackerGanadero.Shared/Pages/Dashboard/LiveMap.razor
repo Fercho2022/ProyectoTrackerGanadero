@@ -1,0 +1,2998 @@
+@page "/live-map"
+@using TrackerGanadero.Shared.Models
+@using TrackerGanadero.Shared.Services
+@inject TrackingService TrackingService
+@inject FarmService FarmService
+@inject SignalRService SignalRService
+@inject NavigationService NavigationService
+@inject VoiceNavigationService VoiceNavigationService
+@inject IJSRuntime JSRuntime
+@implements IDisposable
+
+<div class="container-fluid">
+    <!-- Page Header -->
+    <div class="row mb-3">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h2 class="mb-1">🗺️ Mapa en Tiempo Real</h2>
+                    <p class="text-muted">Ubicación en vivo de todos los animales</p>
+                </div>
+                <div class="d-flex gap-2 map-header-controls">
+                    <select class="form-select" @onchange="OnFarmSelected">
+                        <option value="">Todas las granjas</option>
+                        @if (_farms != null)
+                        {
+                            @foreach (var farm in _farms)
+                            {
+                                <option value="@farm.Id">@farm.Name</option>
+                            }
+                        }
+                    </select>
+                    <button class="btn @(_showGeofencing ? "btn-success" : "btn-outline-success")"
+                            @onclick="ToggleGeofencing"
+                            title="@(_selectedFarmId.HasValue ? "Mostrar/Ocultar Área de Geofencing de la granja seleccionada" : "Selecciona una granja para mostrar su área")"
+                            disabled="@(!_selectedFarmId.HasValue)">
+                        <i class="fas @(_showGeofencing ? "fa-eye" : "fa-eye-slash")"></i>
+                        @(_showGeofencing ? "Ocultar Área" : "Mostrar Área")
+                    </button>
+                    @if (_selectedAnimalId.HasValue)
+                    {
+                        <button class="btn btn-success" @onclick="ShowAllAnimals">
+                            <i class="fas fa-eye"></i> Ver Todos
+                        </button>
+                    }
+                    <button class="btn btn-outline-primary" @onclick="RefreshMap">
+                        <i class="fas fa-sync-alt"></i> Actualizar
+                    </button>
+                    <button class="btn @(VoiceNavigationService.IsEnabled ? "btn-primary" : "btn-outline-secondary")"
+                            @onclick="ToggleVoiceNavigation"
+                            title="@(VoiceNavigationService.IsEnabled ? "Desactivar voz guiada" : "Activar voz guiada")">
+                        <i class="fas @(VoiceNavigationService.IsEnabled ? "fa-volume-up" : "fa-volume-mute")"></i>
+                        @(VoiceNavigationService.IsEnabled ? "Voz ON" : "Voz OFF")
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Map Container -->
+    <div class="row">
+        <div class="col-lg-9">
+            <div class="card">
+                <div class="card-body p-0">
+                    <div id="map" style="height: calc(100vh - 200px); width: 100%; min-height: 500px;"></div>
+
+                    <!-- Route Info Panel -->
+                    @if (_currentRoute != null)
+                    {
+                        <div id="route-info-container">
+                            <div class="route-info-panel">
+                                <div class="route-info-header">
+                                    <h6><i class="fas fa-route me-2"></i>Ruta Activa</h6>
+                                    <button type="button" class="btn-close btn-sm" @onclick="ClearRoute" aria-label="Cerrar"></button>
+                                </div>
+                                <div class="route-info-body">
+                                    <div class="mb-2">
+                                        <strong>Destino:</strong> @_currentRoute.AnimalName
+                                    </div>
+                                    <div class="mb-2">
+                                        <i class="fas fa-road me-2 text-primary"></i>
+                                        <strong>Distancia:</strong> @FormatDistance(_currentRoute.DistanceMeters)
+                                    </div>
+                                    @if (_currentRoute.DistanceToNextTurn.HasValue)
+                                    {
+                                        <div class="mb-2">
+                                            <i class="fas fa-map-signs me-2 text-info"></i>
+                                            <strong>Próximo giro:</strong> @FormatDistance(_currentRoute.DistanceToNextTurn.Value)
+                                        </div>
+                                    }
+                                    <div class="mb-2">
+                                        <i class="fas fa-clock me-2 text-success"></i>
+                                        <strong>Tiempo estimado:</strong> @FormatDuration(_currentRoute.DurationSeconds)
+                                    </div>
+                                    <button class="btn btn-outline-danger btn-sm w-100 mt-2" @onclick="ClearRoute">
+                                        <i class="fas fa-times me-1"></i>Limpiar Ruta
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <!-- Sidebar with Animals List -->
+        <div class="col-lg-3">
+            <div class="card">
+                <div class="card-header">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">🐄 Animales (@_animalLocations.Count)</h5>
+                        @if (_selectedAnimalId.HasValue)
+                        {
+                            <small class="text-muted">
+                                <i class="fas fa-eye"></i> Seguimiento individual
+                            </small>
+                        }
+                        else
+                        {
+                            <small class="text-success">
+                                <i class="fas fa-eye"></i> Vista completa
+                            </small>
+                        }
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    <div class="list-group list-group-flush" style="max-height: calc(100vh - 200px); min-height: 500px; overflow-y: auto;">
+                        @if (_animalLocations.Any())
+                        {
+                            @foreach (var animal in _animalLocations)
+                            {
+                                <div class="list-group-item @(animal.AnimalId == _selectedAnimalId ? "active" : "")"
+                                     style="cursor: pointer;"
+                                     @onclick="() => SelectAnimal(animal.AnimalId)">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <div>
+                                            <h6 class="mb-1">@animal.AnimalName</h6>
+                                            @if (!string.IsNullOrEmpty(animal.Tag))
+                                            {
+                                                <small class="text-muted">Tag: @animal.Tag</small>
+                                            }
+                                        </div>
+                                        <div class="text-end">
+                                            <span class="badge bg-@GetStatusBadgeColor(animal.Status) mb-1">
+                                                @TranslateStatus(animal.Status)
+                                            </span>
+                                            @if (animal.Location != null)
+                                            {
+                                                <br />
+                                                <span class="badge bg-@GetConnectionBadgeColor(animal) mb-1">
+                                                    @GetConnectionStatus(animal)
+                                                </span>
+                                                <br />
+                                                <small class="text-muted">
+                                                    @animal.Location.Timestamp.ToString("HH:mm:ss")
+                                                </small>
+                                            }
+                                        </div>
+                                    </div>
+                                    @if (animal.Location != null)
+                                    {
+                                        <div class="mt-2">
+                                            <small class="text-muted">
+                                                📍 @animal.Location.Latitude.ToString("F6"), @animal.Location.Longitude.ToString("F6")
+                                                @if (animal.Location.Speed.HasValue)
+                                                {
+                                                    <br />
+                                                    <text>Velocidad: @animal.Location.Speed.Value.ToString("F1") km/h</text>
+                                                }
+                                            </small>
+                                        </div>
+
+                                        <!-- Navigation Button -->
+                                        <button class="btn btn-primary btn-sm w-100 mt-2"
+                                                @onclick:stopPropagation="true"
+                                                @onclick="() => NavigateToAnimal(animal.AnimalId)"
+                                                disabled="@_isCalculatingRoute">
+                                            @if (_isCalculatingRoute && _selectedAnimalForRoute == animal.AnimalId)
+                                            {
+                                                <span class="spinner-border spinner-border-sm me-1"></span>
+                                                <text>Calculando ruta...</text>
+                                            }
+                                            else
+                                            {
+                                                <i class="fas fa-route me-1"></i>
+                                                <text>Navegar a este animal</text>
+                                            }
+                                        </button>
+                                    }
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div class="p-4 text-center text-muted">
+                                <i class="fas fa-map-marked-alt fa-3x mb-3"></i>
+                                <p>No hay animales con ubicación disponible</p>
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+
+<!-- Loading Overlay -->
+@if (_isLoading)
+{
+    <div class="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
+         style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
+        <div class="card">
+            <div class="card-body text-center">
+                <div class="spinner-border text-primary mb-3" role="status"></div>
+                <p class="mb-0">Cargando mapa...</p>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<FarmDto> _farms = new();
+    private List<AnimalLocationDto> _animalLocations = new();
+    private int? _selectedFarmId;
+    private int? _selectedAnimalId;
+    private bool _isLoading = true;
+    private bool _signalRConnected = false;
+    private bool _showGeofencing = false;
+    private DateTime? _lastUpdate;
+    private Timer? _autoRefreshTimer;
+    private Timer? _selectedAnimalTrackingTimer;
+    private bool _disposed = false;
+    private bool _mapInitialized = false;
+    private bool _isTrackingSelectedAnimal = false;
+
+    // Route-related state
+    private RouteDto? _currentRoute = null;
+    private bool _isCalculatingRoute = false;
+    private string? _alertMessage;
+    private int? _selectedAnimalForRoute = null;
+    private int? _navigatingToAnimalId = null; // Animal being actively navigated to
+    private Timer? _navigationTrackingTimer = null;
+    private LocationDto? _lastNavigationTargetLocation = null; // Track last known location
+
+    // User movement simulation
+    private Timer? _userMovementSimulationTimer = null;
+    private int _currentRoutePointIndex = 0;
+    private CoordinateDto? _currentUserPosition = null; // Track exact current position for smooth movement
+    private double _traveledDistance = 0; // Total distance traveled in meters
+    private const double SIMULATION_SPEED_MPS = 3; // meters per second (10.8 km/h - fast walking/light jogging)
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadFarms();
+        await LoadAnimalLocations();
+        await InitializeSignalR();
+        InitializeAutoRefresh();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        // Always try to initialize the map when the component renders
+        // This handles both first render and navigation back to this page
+        if (!_mapInitialized)
+        {
+            await InitializeMap();
+            _isLoading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadFarms()
+    {
+        try
+        {
+            _farms = await FarmService.GetFarmsAsync();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading farms: {ex.Message}");
+        }
+    }
+
+    private async Task LoadAnimalLocations()
+    {
+        try
+        {
+            Console.WriteLine($"🔍 LoadAnimalLocations called - Selected Farm ID: {_selectedFarmId}");
+            Console.WriteLine($"🏠 Available farms: {string.Join(", ", _farms?.Select(f => $"{f.Name} (ID: {f.Id})") ?? new[] {"None"})}");
+
+            if (_selectedFarmId.HasValue)
+            {
+                var selectedFarm = _farms?.FirstOrDefault(f => f.Id == _selectedFarmId.Value);
+                Console.WriteLine($"🎯 Loading animals for farm {_selectedFarmId.Value} ({selectedFarm?.Name ?? "Unknown"})");
+                _animalLocations = await TrackingService.GetFarmAnimalsLocationsAsync(_selectedFarmId.Value);
+                Console.WriteLine($"✅ Loaded {_animalLocations.Count} animals from farm {_selectedFarmId.Value} ({selectedFarm?.Name ?? "Unknown"})");
+            }
+            else
+            {
+                // Load animals from all farms with a single API call - MUCH FASTER!
+                Console.WriteLine("🌐 Loading animals from all farms (optimized single call)");
+                _animalLocations = await TrackingService.GetAllAnimalsLocationsAsync();
+                Console.WriteLine($"🚀 Loaded {_animalLocations.Count} animals from all farms with single API call");
+            }
+
+            // Debug: Print animal details with farm information
+            foreach (var animal in _animalLocations)
+            {
+                var farmName = _farms?.FirstOrDefault(f => f.Id == animal.FarmId)?.Name ?? "Unknown";
+                Console.WriteLine($"🐄 Animal: {animal.Name} (Farm: {farmName}, ID: {animal.FarmId}), Location: {animal.Location?.Latitude}, {animal.Location?.Longitude}");
+            }
+
+            _lastUpdate = DateTime.Now;
+            await UpdateMapMarkers();
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading animal locations: {ex.Message}");
+            Console.WriteLine($"Exception details: {ex}");
+        }
+    }
+
+    private async Task InitializeSignalR()
+    {
+        try
+        {
+            // Simplified SignalR initialization without authentication for now
+            Console.WriteLine("SignalR initialization disabled temporarily due to authentication requirements");
+            _signalRConnected = false;
+
+            // TODO: Re-enable SignalR when authentication is properly implemented
+            /*
+            SignalRService.ConnectionStatusChanged += (status) =>
+            {
+                _signalRConnected = status == "Connected";
+                InvokeAsync(StateHasChanged);
+            };
+
+            SignalRService.LocationUpdated += async (location) =>
+            {
+                // Update or add the animal location
+                var existingIndex = _animalLocations.FindIndex(a => a.AnimalId == location.AnimalId);
+                if (existingIndex >= 0)
+                {
+                    _animalLocations[existingIndex] = location;
+                }
+                else
+                {
+                    _animalLocations.Add(location);
+                }
+
+                _lastUpdate = DateTime.Now;
+                await InvokeAsync(async () =>
+                {
+                    await UpdateMapMarkers();
+                    StateHasChanged();
+                });
+            };
+            */
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error initializing SignalR: {ex.Message}");
+        }
+    }
+
+    private async Task InitializeMap()
+    {
+        try
+        {
+            // Reset map initialization state
+            _mapInitialized = false;
+
+            // Force map re-initialization on each call
+            await JSRuntime.InvokeVoidAsync("reinitializeMap");
+
+            _mapInitialized = true;
+            await UpdateMapMarkers();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error initializing map: {ex.Message}");
+            _mapInitialized = false;
+        }
+    }
+
+    private async Task UpdateMapMarkers()
+    {
+        try
+        {
+            Console.WriteLine($"UpdateMapMarkers called with {_animalLocations.Count} animals");
+
+            var markersData = _animalLocations
+                .Where(a => a.Location != null)
+                .Select(a => new
+                {
+                    id = a.AnimalId,
+                    name = a.AnimalName,
+                    tag = a.Tag,
+                    status = a.Status,
+                    currentLocation = new
+                    {
+                        latitude = a.Location!.Latitude,
+                        longitude = a.Location.Longitude,
+                        altitude = a.Location.Altitude,
+                        speed = a.Location.Speed ?? 0,
+                        temperature = a.Location.Temperature,
+                        activityLevel = a.Location.ActivityLevel,
+                        timestamp = a.Location.Timestamp.ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+                    }
+                })
+                .ToArray();
+
+            Console.WriteLine($"Sending {markersData.Length} markers to JavaScript");
+            foreach (var marker in markersData)
+            {
+                Console.WriteLine($"Marker: {marker.name} at {marker.currentLocation.latitude}, {marker.currentLocation.longitude}");
+            }
+
+            // Llamar a la función JavaScript con el parámetro para abrir todos los popups
+            // openAllPopups = true significa que queremos mostrar todos los popups cuando se selecciona una granja
+            bool openAllPopups = !_selectedAnimalId.HasValue; // Solo abrir todos si no hay animal seleccionado
+            await JSRuntime.InvokeVoidAsync("updateMapMarkers", markersData, openAllPopups);
+            Console.WriteLine($"JavaScript updateMapMarkers call completed with openAllPopups={openAllPopups}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error updating map markers: {ex.Message}");
+            Console.WriteLine($"Exception details: {ex}");
+        }
+    }
+
+    private async Task OnFarmSelected(ChangeEventArgs e)
+    {
+        var farmIdStr = e.Value?.ToString();
+        _selectedFarmId = string.IsNullOrEmpty(farmIdStr) ? null : int.Parse(farmIdStr);
+
+        // Reset la selección de animal individual cuando se cambia de granja
+        _selectedAnimalId = null;
+        StopSelectedAnimalTracking();
+
+        // Hide any currently displayed geofencing area when changing farms
+        if (_showGeofencing)
+        {
+            _showGeofencing = false;
+            await JSRuntime.InvokeVoidAsync("clearAllBoundaries");
+        }
+
+        // Reset del estado del mapa para permitir reajuste de zoom inicial
+        await JSRuntime.InvokeVoidAsync("resetMapState");
+
+        await LoadAnimalLocations();
+    }
+
+    private async Task RefreshMap()
+    {
+        _isLoading = true;
+        StateHasChanged();
+
+        await LoadAnimalLocations();
+
+        _isLoading = false;
+        StateHasChanged();
+    }
+
+    private async Task ShowAllAnimals()
+    {
+        // Resetear la selección de animal individual
+        _selectedAnimalId = null;
+
+        // Persistir que ya no hay animal seleccionado
+
+        // Parar el tracking del animal específico
+        StopSelectedAnimalTracking();
+
+        // Recargar y mostrar todos los animales con sus popups
+        await UpdateMapMarkers(); // Esto ahora llamará updateMapMarkers con openAllPopups=true
+
+        StateHasChanged();
+    }
+
+    private async Task SelectAnimal(int animalId)
+    {
+        _selectedAnimalId = animalId;
+
+        // Persistir la selección de animal
+
+        var animal = _animalLocations.FirstOrDefault(a => a.AnimalId == animalId);
+
+        if (animal?.Location != null)
+        {
+            // Mostrar solo este animal específico
+            await JSRuntime.InvokeVoidAsync("showSingleAnimal", animalId);
+
+            // También crear el marcador central detallado
+            await JSRuntime.InvokeVoidAsync("centerMapOnAnimalWithDetails",
+                animalId,
+                animal.Location.Latitude,
+                animal.Location.Longitude,
+                animal.AnimalName,
+                animal.Tag ?? "Sin Tag",
+                animal.Status ?? "Healthy",
+                animal.Location.Speed ?? 0);
+
+            // Start real-time tracking for this animal
+            await StartSelectedAnimalTracking(animalId);
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task StartSelectedAnimalTracking(int animalId)
+    {
+        try
+        {
+            // Stop any existing tracking
+            StopSelectedAnimalTracking();
+
+            _isTrackingSelectedAnimal = true;
+
+            // Persistir el estado de tracking
+
+            Console.WriteLine($"Starting real-time tracking for animal {animalId}");
+
+            // Create a timer that updates every 5 seconds for the selected animal
+            _selectedAnimalTrackingTimer = new Timer(async _ =>
+            {
+                if (!_disposed && _isTrackingSelectedAnimal && _selectedAnimalId == animalId)
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        await UpdateSelectedAnimalPosition(animalId);
+                    });
+                }
+            }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+
+            Console.WriteLine($"Real-time tracking started for animal {animalId} - updates every 5 seconds");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error starting animal tracking: {ex.Message}");
+        }
+    }
+
+    private void StopSelectedAnimalTracking()
+    {
+        try
+        {
+            if (_selectedAnimalTrackingTimer != null)
+            {
+                _selectedAnimalTrackingTimer.Dispose();
+                _selectedAnimalTrackingTimer = null;
+                Console.WriteLine("Stopped real-time animal tracking");
+            }
+
+            _isTrackingSelectedAnimal = false;
+
+            // Persistir el estado de tracking
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error stopping animal tracking: {ex.Message}");
+        }
+    }
+
+    private async Task UpdateSelectedAnimalPosition(int animalId)
+    {
+        try
+        {
+            Console.WriteLine($"Updating position for selected animal {animalId}");
+
+            // Get updated location for the specific animal
+            var updatedAnimals = await TrackingService.GetFarmAnimalsLocationsAsync(_selectedFarmId ?? 0);
+            var updatedAnimal = updatedAnimals.FirstOrDefault(a => a.AnimalId == animalId);
+
+            if (updatedAnimal?.Location != null)
+            {
+                // Update the animal in our local list
+                var existingIndex = _animalLocations.FindIndex(a => a.AnimalId == animalId);
+                if (existingIndex >= 0)
+                {
+                    _animalLocations[existingIndex] = updatedAnimal;
+                }
+
+                // Update the map marker position and popup in real-time
+                await JSRuntime.InvokeVoidAsync("updateSelectedAnimalPosition",
+                    animalId,
+                    updatedAnimal.Location.Latitude,
+                    updatedAnimal.Location.Longitude,
+                    updatedAnimal.AnimalName,
+                    updatedAnimal.Tag ?? "Sin Tag",
+                    updatedAnimal.Status ?? "Healthy",
+                    updatedAnimal.Location.Speed ?? 0);
+
+                // Save location history to database
+                await SaveLocationToDatabase(updatedAnimal);
+
+                _lastUpdate = DateTime.Now;
+                StateHasChanged();
+
+                Console.WriteLine($"Updated animal {updatedAnimal.AnimalName} position to {updatedAnimal.Location.Latitude}, {updatedAnimal.Location.Longitude} at speed {updatedAnimal.Location.Speed} km/h");
+            }
+            else
+            {
+                Console.WriteLine($"No updated location found for animal {animalId}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error updating selected animal position: {ex.Message}");
+        }
+    }
+
+    private async Task SaveLocationToDatabase(dynamic animalLocationData)
+    {
+        try
+        {
+            // Extract data from the animal location object
+            var animalId = (int)animalLocationData.AnimalId;
+            var trackerId = animalLocationData.TrackerId ?? 0;
+            var location = animalLocationData.Location;
+
+            if (location != null && trackerId > 0)
+            {
+                var locationHistoryData = new TrackerGanadero.Shared.Services.SaveLocationHistoryDto
+                {
+                    AnimalId = animalId,
+                    TrackerId = trackerId,
+                    Latitude = location.Latitude,
+                    Longitude = location.Longitude,
+                    Altitude = location.Altitude ?? 0,
+                    Speed = location.Speed ?? 0,
+                    ActivityLevel = location.ActivityLevel ?? 50,
+                    Temperature = location.Temperature ?? 20,
+                    SignalStrength = 100, // Default good signal
+                    Timestamp = location.Timestamp,
+                    Source = "Frontend-RealTime"
+                };
+
+                await TrackingService.SaveLocationHistoryAsync(locationHistoryData);
+                Console.WriteLine($"✅ Saved location history for animal {animalId} at {location.Latitude}, {location.Longitude}");
+            }
+            else
+            {
+                Console.WriteLine($"⚠️ Cannot save location history: missing data for animal {animalId}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Error saving location to database: {ex.Message}");
+            // Don't throw - continue with tracking even if save fails
+        }
+    }
+
+    private string GetStatusBadgeColor(string status)
+    {
+        return status.ToLower() switch
+        {
+            "saludable" => "success",        // Verde para saludable
+            "healthy" => "success",          // Verde para healthy (compatibilidad)
+            "enfermo" => "danger",           // Rojo para enfermo
+            "sick" => "danger",              // Rojo para sick (compatibilidad)
+            "en observación" => "warning",   // Amarillo para en observación
+            "monitoring" => "warning",       // Amarillo para monitoring (compatibilidad)
+            _ => "secondary"                 // Gris para estados desconocidos
+        };
+    }
+
+    private string TranslateStatus(string status)
+    {
+        return status.ToLower() switch
+        {
+            "healthy" => "Saludable",
+            "sick" => "Enfermo",
+            "monitoring" => "En observación",
+            _ => status  // Si ya está en español o es otro estado, devolver tal como está
+        };
+    }
+
+    private bool IsAnimalConnected(AnimalLocationDto animal)
+    {
+        if (animal.Location == null) return false;
+
+        // Considera conectado si las coordenadas se actualizaron en los últimos 2 minutos
+        var timeDifference = DateTime.UtcNow - animal.Location.Timestamp.ToUniversalTime();
+        return timeDifference.TotalMinutes <= 2;
+    }
+
+    private string GetConnectionStatus(AnimalLocationDto animal)
+    {
+        return IsAnimalConnected(animal) ? "🟢 Conectado" : "🔴 Desconectado";
+    }
+
+    private string GetConnectionBadgeColor(AnimalLocationDto animal)
+    {
+        return IsAnimalConnected(animal) ? "success" : "danger";
+    }
+
+    private void InitializeAutoRefresh()
+    {
+        try
+        {
+            // Auto-refresh every 15 seconds for better real-time experience
+            _autoRefreshTimer = new Timer(async _ =>
+            {
+                if (!_disposed)
+                {
+                    Console.WriteLine("Auto-refresh timer triggered for all farm animals");
+                    await InvokeAsync(async () =>
+                    {
+                        await LoadAnimalLocations();
+                    });
+                }
+            }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
+
+            Console.WriteLine("Auto-refresh timer initialized - will update all farm animals every 15 seconds");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error initializing auto-refresh: {ex.Message}");
+        }
+    }
+
+    private void ToggleVoiceNavigation()
+    {
+        VoiceNavigationService.IsEnabled = !VoiceNavigationService.IsEnabled;
+        System.Diagnostics.Debug.WriteLine($"🔊 Voice navigation {(VoiceNavigationService.IsEnabled ? "enabled" : "disabled")}");
+        StateHasChanged();
+    }
+
+    private async Task ToggleGeofencing()
+    {
+        // Only allow toggle if a farm is selected
+        if (!_selectedFarmId.HasValue)
+        {
+            Console.WriteLine("No farm selected - cannot toggle geofencing");
+            return;
+        }
+
+        _showGeofencing = !_showGeofencing;
+
+        // Persistir el estado de geofencing
+
+        try
+        {
+            if (_showGeofencing)
+            {
+                // Show geofencing area ONLY for the selected farm
+                var selectedFarm = _farms?.FirstOrDefault(f => f.Id == _selectedFarmId.Value);
+                if (selectedFarm?.BoundaryCoordinates?.Any() == true)
+                {
+                    Console.WriteLine($"Showing geofencing area for selected farm: {selectedFarm.Name}");
+                    await JSRuntime.InvokeVoidAsync("addFarmBoundary", selectedFarm.Id, selectedFarm.Name, selectedFarm.BoundaryCoordinates.ToArray());
+                }
+                else
+                {
+                    Console.WriteLine($"Selected farm '{selectedFarm?.Name}' has no geofencing area configured");
+                    _showGeofencing = false; // Reset the toggle since there's nothing to show
+                            }
+            }
+            else
+            {
+                // Hide the selected farm's geofencing area
+                Console.WriteLine($"Hiding geofencing area for selected farm");
+                await JSRuntime.InvokeVoidAsync("clearAllBoundaries");
+            }
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error toggling geofencing: {ex.Message}");
+        }
+    }
+
+    // ==================== GPS NAVIGATION METHODS ====================
+
+    /// <summary>
+    /// Calculates and displays route to selected animal
+    /// </summary>
+    private async Task NavigateToAnimal(int animalId)
+    {
+        try
+        {
+            System.Diagnostics.Debug.WriteLine($"🎯 NavigateToAnimal called for animal ID: {animalId}");
+            _isCalculatingRoute = true;
+            _selectedAnimalForRoute = animalId;
+            StateHasChanged();
+
+            // Find animal location
+            var animal = _animalLocations.FirstOrDefault(a => a.AnimalId == animalId);
+            if (animal?.Location == null)
+            {
+                System.Diagnostics.Debug.WriteLine($"❌ Animal {animalId} has no location");
+                await ShowAlert("Error", "No se pudo obtener la ubicación del animal. Asegúrate de que el tracker esté transmitiendo.");
+                return;
+            }
+
+            System.Diagnostics.Debug.WriteLine($"✅ Animal found: {animal.AnimalName} at ({animal.Location.Latitude}, {animal.Location.Longitude})");
+
+            // IMPORTANTE: Si estamos en modo mock Y el animal tiene granja con geofencing,
+            // generar un punto de inicio dentro del geofence ANTES de obtener la ubicación
+            if (NavigationService.USE_MOCK_LOCATION && animal.FarmId > 0)
+            {
+                try
+                {
+                    System.Diagnostics.Debug.WriteLine($"🔧 MOCK MODE: Trying to get geofence boundaries for farm {animal.FarmId}");
+                    var farm = await FarmService.GetFarmAsync(animal.FarmId);
+
+                    if (farm?.BoundaryCoordinates != null && farm.BoundaryCoordinates.Count >= 3)
+                    {
+                        System.Diagnostics.Debug.WriteLine($"✅ Farm has {farm.BoundaryCoordinates.Count} boundary coordinates");
+
+                        // Call JavaScript to generate a random point inside the polygon
+                        var generatedPoint = await JSRuntime.InvokeAsync<CoordinateDto>("generatePointInsidePolygon", farm.BoundaryCoordinates);
+
+                        if (generatedPoint != null)
+                        {
+                            System.Diagnostics.Debug.WriteLine($"✅ Generated starting position inside geofence: ({generatedPoint.Latitude}, {generatedPoint.Longitude})");
+
+                            // CRÍTICO: Actualizar la ubicación mock ANTES de llamar a GetUserLocationAsync()
+                            NavigationService.UpdateMockLocation(generatedPoint.Latitude, generatedPoint.Longitude);
+                        }
+                    }
+                    else
+                    {
+                        System.Diagnostics.Debug.WriteLine("⚠️ Farm has no geofence boundaries, using default mock location");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"⚠️ Could not get geofence boundaries: {ex.Message}. Using default mock location");
+                }
+            }
+
+            // Get user's current GPS location (ahora con la ubicación mock actualizada si corresponde)
+            System.Diagnostics.Debug.WriteLine("📍 Getting user location...");
+            var userLocation = await NavigationService.GetUserLocationAsync();
+
+            if (userLocation == null)
+            {
+                System.Diagnostics.Debug.WriteLine("❌ User location is null");
+                await ShowAlert("Ubicación requerida",
+                    "No se pudo obtener tu ubicación. Verifica que:\n" +
+                    "• GPS esté activado en tu dispositivo\n" +
+                    "• La app tenga permiso para acceder a ubicación");
+                return;
+            }
+
+            System.Diagnostics.Debug.WriteLine($"✅ User location obtained: ({userLocation.Latitude}, {userLocation.Longitude})");
+
+            // Calculate route via GraphHopper
+            System.Diagnostics.Debug.WriteLine("🗺️ Calculating route...");
+            var route = await NavigationService.CalculateRouteAsync(
+                new CoordinateDto
+                {
+                    Latitude = userLocation.Latitude,
+                    Longitude = userLocation.Longitude
+                },
+                new CoordinateDto
+                {
+                    Latitude = animal.Location.Latitude,
+                    Longitude = animal.Location.Longitude
+                }
+            );
+
+            if (route == null)
+            {
+                System.Diagnostics.Debug.WriteLine("❌ Route calculation returned null");
+                await ShowAlert("Error de ruta",
+                    "No se pudo calcular la ruta. Verifica tu conexión a internet e intenta nuevamente.");
+                return;
+            }
+
+            System.Diagnostics.Debug.WriteLine($"✅ Route calculated successfully: {route.DistanceMeters}m, {route.DurationSeconds}s, {route.Coordinates.Count} points");
+
+            // FIX: The routing engine snaps to the nearest road. Replace the last point of the
+            // route with the precise animal location to draw a correct line to the target.
+            if (route.Coordinates.Any())
+            {
+                var preciseAnimalLocation = new CoordinateDto
+                {
+                    Latitude = animal.Location.Latitude,
+                    Longitude = animal.Location.Longitude
+                };
+                route.Coordinates[route.Coordinates.Count - 1] = preciseAnimalLocation;
+                System.Diagnostics.Debug.WriteLine("🔧 Corrected route's final coordinate to precise animal location.");
+            }
+
+            // Store route and draw on map
+            _currentRoute = route;
+            _currentRoute.AnimalName = animal.AnimalName;
+
+            System.Diagnostics.Debug.WriteLine("🎨 Drawing route on map...");
+            await JSRuntime.InvokeVoidAsync("drawRoute", route);
+
+
+            // Generate voice navigation instructions
+            System.Diagnostics.Debug.WriteLine("🔊 Generating voice navigation instructions...");
+            VoiceNavigationService.GenerateInstructions(route);
+
+            // Start tracking the animal's movement to update route automatically
+            _navigatingToAnimalId = animalId;
+            _lastNavigationTargetLocation = animal.Location;
+            StartNavigationTracking();
+
+            // Start user movement simulation if enabled
+            if (NavigationService.SIMULATE_USER_MOVEMENT && route.Coordinates.Count > 0)
+            {
+                _currentRoutePointIndex = 0;
+                _currentUserPosition = route.Coordinates[0]; // Initialize to start position
+                _traveledDistance = 0; // Reset traveled distance
+                StartUserMovementSimulation();
+            }
+
+            System.Diagnostics.Debug.WriteLine("✅ Navigation completed successfully - tracking animal movement");
+            StateHasChanged();
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Permission denied: {ex.Message}");
+            await ShowAlert("Permiso denegado",
+                "Tracker Ganadero necesita acceso a tu ubicacion para calcular la ruta. " +
+                "Por favor, habilita el permiso de ubicacion en la configuracion.");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"❌ Error navigating to animal: {ex.Message}");
+            System.Diagnostics.Debug.WriteLine($"Stack trace: {ex.StackTrace}");
+            await ShowAlert("Error",
+                $"Ocurrió un error al calcular la ruta: {ex.Message}\n\nIntenta nuevamente.");
+        }
+        finally
+        {
+            System.Diagnostics.Debug.WriteLine("🏁 NavigateToAnimal finally block - cleaning up");
+            _isCalculatingRoute = false;
+            _selectedAnimalForRoute = null;
+            StateHasChanged();
+        }
+    }
+
+    /// <summary>
+    /// Clears the active route from the map
+    /// </summary>
+    private async Task ClearRoute()
+    {
+        System.Diagnostics.Debug.WriteLine("🧹 Clearing route and stopping navigation tracking");
+        _currentRoute = null;
+        _navigatingToAnimalId = null;
+        _lastNavigationTargetLocation = null;
+        VoiceNavigationService.Reset();
+        StopNavigationTracking();
+        StopUserMovementSimulation();
+        await JSRuntime.InvokeVoidAsync("clearRoute");
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Formats distance in meters to human-readable string
+    /// </summary>
+    private string FormatDistance(double meters)
+    {
+        if (meters < 1000)
+            return $"{meters:F0} m";
+        return $"{(meters / 1000):F1} km";
+    }
+
+    /// <summary>
+    /// Formats duration in seconds to human-readable string
+    /// </summary>
+    private string FormatDuration(double seconds)
+    {
+        var duration = TimeSpan.FromSeconds(seconds);
+        if (duration.TotalHours >= 1)
+            return $"{duration.Hours}h {duration.Minutes}m";
+        return $"{duration.Minutes}m";
+    }
+
+    /// <summary>
+    /// Shows platform-specific alert dialog
+    /// </summary>
+    private async Task ShowAlert(string title, string message)
+    {
+        try
+        {
+            _alertMessage = $"{title}: {message}";
+            StateHasChanged();
+            await Task.Delay(5000);
+            _alertMessage = null;
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error showing alert: {ex.Message}");
+        }
+    }
+
+    // ==================== NAVIGATION TRACKING ====================
+
+    /// <summary>
+    /// Starts tracking the target animal's movement to update route automatically
+    /// </summary>
+    private void StartNavigationTracking()
+    {
+        try
+        {
+            // Stop any existing tracking first
+            StopNavigationTracking();
+
+            System.Diagnostics.Debug.WriteLine($"📍 Starting navigation tracking for animal {_navigatingToAnimalId}");
+
+            // Create a timer that checks animal position every 5 seconds
+            _navigationTrackingTimer = new Timer(async _ =>
+            {
+                if (!_disposed && _navigatingToAnimalId.HasValue)
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        await UpdateNavigationTarget();
+                    });
+                }
+            }, null, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(5));
+
+            System.Diagnostics.Debug.WriteLine("✅ Navigation tracking started - will update route if animal moves");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"❌ Error starting navigation tracking: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Stops tracking the target animal's movement
+    /// </summary>
+    private void StopNavigationTracking()
+    {
+        try
+        {
+            if (_navigationTrackingTimer != null)
+            {
+                _navigationTrackingTimer.Dispose();
+                _navigationTrackingTimer = null;
+                System.Diagnostics.Debug.WriteLine("⏹️ Navigation tracking stopped");
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"❌ Error stopping navigation tracking: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Checks if the target animal has moved and updates the route if necessary
+    /// </summary>
+    private async Task UpdateNavigationTarget()
+    {
+        try
+        {
+            if (!_navigatingToAnimalId.HasValue || _lastNavigationTargetLocation == null)
+            {
+                System.Diagnostics.Debug.WriteLine("⚠️ No active navigation target");
+                return;
+            }
+
+            // Get updated animal location
+            var animal = _animalLocations.FirstOrDefault(a => a.AnimalId == _navigatingToAnimalId.Value);
+            if (animal?.Location == null)
+            {
+                System.Diagnostics.Debug.WriteLine($"⚠️ Animal {_navigatingToAnimalId} no longer has location");
+                return;
+            }
+
+            // Calculate distance between last known position and current position
+            var distance = CalculateDistance(
+                _lastNavigationTargetLocation.Latitude,
+                _lastNavigationTargetLocation.Longitude,
+                animal.Location.Latitude,
+                animal.Location.Longitude
+            );
+
+            System.Diagnostics.Debug.WriteLine($"📏 Animal {animal.AnimalName} moved {distance:F1}m from last route calculation");
+
+            // If animal moved more than 10 meters, recalculate route
+            if (distance > 10)
+            {
+                System.Diagnostics.Debug.WriteLine($"🔄 Animal moved significantly ({distance:F1}m) - recalculating route");
+
+                // Get user's current GPS location
+                var userLocation = await NavigationService.GetUserLocationAsync();
+                if (userLocation == null)
+                {
+                    System.Diagnostics.Debug.WriteLine("⚠️ Could not get user location for route update");
+                    return;
+                }
+
+                // Calculate new route
+                var route = await NavigationService.CalculateRouteAsync(
+                    new CoordinateDto
+                    {
+                        Latitude = userLocation.Latitude,
+                        Longitude = userLocation.Longitude
+                    },
+                    new CoordinateDto
+                    {
+                        Latitude = animal.Location.Latitude,
+                        Longitude = animal.Location.Longitude
+                    }
+                );
+
+                if (route != null && route.Coordinates.Count > 0)
+                {
+                    // Update route
+                    _currentRoute = route;
+                    _currentRoute.AnimalName = animal.AnimalName;
+                    _lastNavigationTargetLocation = animal.Location;
+
+                    // CRITICAL: Reset simulation state for new route
+                    _currentRoutePointIndex = 0;
+                    _currentUserPosition = route.Coordinates[0]; // Reset to new starting position (user's current location)
+                    _traveledDistance = 0; // Reset traveled distance
+
+                    // Regenerate voice navigation instructions for updated route (skip "Iniciando navegación")
+                    VoiceNavigationService.GenerateInstructions(route, isUpdate: true);
+
+                    // Redraw route on map
+                    await JSRuntime.InvokeVoidAsync("drawRoute", route);
+
+                    StateHasChanged();
+                    System.Diagnostics.Debug.WriteLine($"✅ Route updated - new distance: {route.DistanceMeters}m, simulation state reset");
+                }
+                else
+                {
+                    System.Diagnostics.Debug.WriteLine("⚠️ Failed to recalculate route");
+                }
+            }
+            else
+            {
+                // Animal moved less than threshold, just update the end marker position
+                System.Diagnostics.Debug.WriteLine($"📍 Minor movement ({distance:F1}m) - updating destination marker only");
+                await JSRuntime.InvokeVoidAsync("updateRouteEndMarker",
+                    animal.Location.Latitude,
+                    animal.Location.Longitude);
+                _lastNavigationTargetLocation = animal.Location;
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"❌ Error updating navigation target: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Calculates distance between two GPS coordinates in meters using Haversine formula
+    /// </summary>
+    private double CalculateDistance(double lat1, double lon1, double lat2, double lon2)
+    {
+        const double R = 6371000; // Earth's radius in meters
+
+        var dLat = (lat2 - lat1) * Math.PI / 180;
+        var dLon = (lon2 - lon1) * Math.PI / 180;
+
+        var a = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) +
+                Math.Cos(lat1 * Math.PI / 180) * Math.Cos(lat2 * Math.PI / 180) *
+                Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+
+        var c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
+
+        return R * c; // Distance in meters
+    }
+
+    // ==================== USER MOVEMENT SIMULATION ====================
+
+    /// <summary>
+    /// Starts simulating user movement along the calculated route
+    /// </summary>
+    private void StartUserMovementSimulation()
+    {
+        try
+        {
+            StopUserMovementSimulation();
+
+            if (_currentRoute == null || _currentRoute.Coordinates.Count < 2)
+            {
+                System.Diagnostics.Debug.WriteLine("⚠️ Cannot start simulation - no valid route");
+                return;
+            }
+
+            System.Diagnostics.Debug.WriteLine($"🚶 Starting user movement simulation at {SIMULATION_SPEED_MPS}m/s");
+
+            // Update every 1 second to simulate smooth movement
+            _userMovementSimulationTimer = new Timer(async _ =>
+            {
+                if (!_disposed && _currentRoute != null)
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        await SimulateUserMovementStep();
+                    });
+                }
+            }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
+
+            System.Diagnostics.Debug.WriteLine("✅ User movement simulation started");
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"❌ Error starting user movement simulation: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Stops the user movement simulation
+    /// </summary>
+    private void StopUserMovementSimulation()
+    {
+        try
+        {
+            if (_userMovementSimulationTimer != null)
+            {
+                _userMovementSimulationTimer.Dispose();
+                _userMovementSimulationTimer = null;
+                _currentRoutePointIndex = 0;
+                _currentUserPosition = null;
+                System.Diagnostics.Debug.WriteLine("⏹️ User movement simulation stopped");
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"❌ Error stopping user movement simulation: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Simulates one step of user movement along the route
+    /// </summary>
+    private async Task SimulateUserMovementStep()
+    {
+        try
+        {
+            if (_currentRoute == null || _currentRoute.Coordinates.Count == 0 || _currentUserPosition == null)
+            {
+                System.Diagnostics.Debug.WriteLine("⚠️ No route or position for simulation");
+                StopUserMovementSimulation();
+                return;
+            }
+
+            // Distance to move in this step
+            var distanceToMove = SIMULATION_SPEED_MPS * 1.0; // 1 second interval
+            var remainingDistance = distanceToMove;
+            var previousPosition = new CoordinateDto { Latitude = _currentUserPosition.Latitude, Longitude = _currentUserPosition.Longitude };
+
+            // Keep moving until we've covered the distance or reached the end
+            while (remainingDistance > 0.01 && _currentRoutePointIndex < _currentRoute.Coordinates.Count - 1)
+            {
+                var nextWaypoint = _currentRoute.Coordinates[_currentRoutePointIndex + 1];
+
+                var distanceToNextWaypoint = CalculateDistance(
+                    _currentUserPosition.Latitude, _currentUserPosition.Longitude,
+                    nextWaypoint.Latitude, nextWaypoint.Longitude
+                );
+
+                if (distanceToNextWaypoint <= remainingDistance)
+                {
+                    // We can reach the next waypoint, move to it
+                    _currentUserPosition = new CoordinateDto
+                    {
+                        Latitude = nextWaypoint.Latitude,
+                        Longitude = nextWaypoint.Longitude
+                    };
+                    remainingDistance -= distanceToNextWaypoint;
+                    _currentRoutePointIndex++;
+                    System.Diagnostics.Debug.WriteLine($"🚶 Reached waypoint {_currentRoutePointIndex}/{_currentRoute.Coordinates.Count}");
+                }
+                else
+                {
+                    // Move partially toward the next waypoint
+                    var fraction = remainingDistance / distanceToNextWaypoint;
+                    var newLat = _currentUserPosition.Latitude + (nextWaypoint.Latitude - _currentUserPosition.Latitude) * fraction;
+                    var newLon = _currentUserPosition.Longitude + (nextWaypoint.Longitude - _currentUserPosition.Longitude) * fraction;
+
+                    _currentUserPosition = new CoordinateDto { Latitude = newLat, Longitude = newLon };
+                    remainingDistance = 0; // Used up all movement
+                    System.Diagnostics.Debug.WriteLine($"🚶 Moving toward waypoint {_currentRoutePointIndex + 1} ({fraction:P0} of segment)");
+                }
+            }
+
+            // Update traveled distance
+            var stepDistance = CalculateDistance(
+                previousPosition.Latitude, previousPosition.Longitude,
+                _currentUserPosition.Latitude, _currentUserPosition.Longitude
+            );
+            _traveledDistance += stepDistance;
+
+            // Check for voice navigation instructions
+            await VoiceNavigationService.CheckAndAnnounceInstructions(_currentUserPosition, _traveledDistance);
+
+            // Check if we reached the final destination
+            if (_currentRoutePointIndex >= _currentRoute.Coordinates.Count - 1)
+            {
+                var finalDestination = _currentRoute.Coordinates[_currentRoute.Coordinates.Count - 1];
+                var distanceToEnd = CalculateDistance(
+                    _currentUserPosition.Latitude, _currentUserPosition.Longitude,
+                    finalDestination.Latitude, finalDestination.Longitude
+                );
+
+                if (distanceToEnd < 5) // Within 5 meters of destination
+                {
+                    System.Diagnostics.Debug.WriteLine("🎉 Simulation completed - reached destination!");
+                    await VoiceNavigationService.AnnounceArrival();
+                    StopUserMovementSimulation();
+                    await ShowAlert("Destino Alcanzado", $"Has llegado a {_currentRoute.AnimalName}!");
+                    return;
+                }
+            }
+
+            // Update mock GPS location
+            NavigationService.UpdateMockLocation(_currentUserPosition.Latitude, _currentUserPosition.Longitude);
+
+            // Update start marker on map
+            await JSRuntime.InvokeVoidAsync("updateRouteStartMarker",
+                _currentUserPosition.Latitude,
+                _currentUserPosition.Longitude);
+
+            // Update route to show only remaining path (remove traveled segments)
+            var remainingCoordinates = new List<CoordinateDto> { _currentUserPosition };
+            remainingCoordinates.AddRange(_currentRoute.Coordinates.Skip(_currentRoutePointIndex + 1));
+            await JSRuntime.InvokeVoidAsync("updateRemainingRoute", remainingCoordinates);
+
+            // Calculate remaining distance to destination
+            var totalRemainingDistance = 0.0;
+            var distanceToNextTurn = 0.0;
+
+            // Add distance from current position to next waypoint
+            if (_currentRoutePointIndex < _currentRoute.Coordinates.Count - 1)
+            {
+                var nextWaypoint = _currentRoute.Coordinates[_currentRoutePointIndex + 1];
+                distanceToNextTurn = CalculateDistance(
+                    _currentUserPosition.Latitude, _currentUserPosition.Longitude,
+                    nextWaypoint.Latitude, nextWaypoint.Longitude
+                );
+                totalRemainingDistance += distanceToNextTurn;
+            }
+
+            // Add distance for remaining waypoints
+            for (int i = _currentRoutePointIndex + 1; i < _currentRoute.Coordinates.Count - 1; i++)
+            {
+                var p1 = _currentRoute.Coordinates[i];
+                var p2 = _currentRoute.Coordinates[i + 1];
+                totalRemainingDistance += CalculateDistance(p1.Latitude, p1.Longitude, p2.Latitude, p2.Longitude);
+            }
+
+            _currentRoute.DistanceMeters = totalRemainingDistance;
+            _currentRoute.DistanceToNextTurn = distanceToNextTurn;
+
+            System.Diagnostics.Debug.WriteLine($"📍 User position: ({_currentUserPosition.Latitude:F6}, {_currentUserPosition.Longitude:F6}) - {totalRemainingDistance:F0}m remaining, {distanceToNextTurn:F0}m to next turn");
+
+            // Note: Route recalculation when animal moves is handled by UpdateNavigationTarget()
+            // which runs every 5 seconds via _navigationTrackingTimer
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"❌ Error in simulation step: {ex.Message}");
+        }
+    }
+
+    // ==================== DISPOSE ====================
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _autoRefreshTimer?.Dispose();
+
+        // Stop selected animal tracking
+        StopSelectedAnimalTracking();
+
+        // Stop navigation tracking
+        StopNavigationTracking();
+
+        // Stop user movement simulation
+        StopUserMovementSimulation();
+
+        // Clean up map when component is disposed
+        try
+        {
+            JSRuntime.InvokeVoidAsync("cleanupMap");
+            _mapInitialized = false;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error cleaning up map: {ex.Message}");
+        }
+    }
+}
+
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin="" />
+
+<!-- Custom CSS for enhanced map popups -->
+<style>
+    .custom-popup .leaflet-popup-content-wrapper {
+        border-radius: 10px;
+        box-shadow: 0 5px 20px rgba(0, 0, 0, 0.2);
+        border: none;
+    }
+
+    .custom-popup .leaflet-popup-content {
+        margin: 0;
+        padding: 0;
+        line-height: 1.4;
+    }
+
+    .custom-popup .leaflet-popup-tip {
+        background: white;
+        border: none;
+        box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    }
+
+    .custom-cow-marker {
+        filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.3));
+        position: relative;
+    }
+
+    .cow-marker-with-pulse {
+        position: relative;
+        display: inline-block;
+        animation: cowPulse 2s ease-in-out infinite;
+    }
+
+    @@keyframes cowPulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.1); }
+        100% { transform: scale(1); }
+    }
+
+
+    .coordinates-display {
+        font-family: 'Courier New', monospace;
+        background: linear-gradient(145deg, #f0f0f0, #e6e6e6);
+        padding: 8px;
+        border-radius: 6px;
+        border: 1px solid #ddd;
+    }
+
+    /* ==================== ROUTE INFO PANEL STYLES ==================== */
+
+    /* Container can be dragged by user */
+    #route-info-container {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        z-index: 1000;
+        pointer-events: none; /* Allow clicks to pass through empty space */
+        transition: none; /* Disable transitions when dragging */
+    }
+
+    #route-info-container.dragging {
+        transition: none !important; /* Ensure smooth dragging */
+    }
+
+    .route-info-panel {
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        min-width: 280px;
+        max-width: 320px;
+        animation: slideInRight 0.3s ease-out;
+        pointer-events: auto; /* Re-enable clicks on the panel itself */
+    }
+
+    .route-info-panel.dragging {
+        box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3); /* Mayor sombra al arrastrar */
+        cursor: grabbing !important;
+    }
+
+    @@keyframes slideInRight {
+        from {
+            transform: translateX(100%);
+            opacity: 0;
+        }
+
+        to {
+            transform: translateX(0);
+            opacity: 1;
+        }
+    }
+
+    .route-info-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 15px;
+        background: linear-gradient(135deg, #2196F3, #1976D2);
+        color: white;
+        border-radius: 12px 12px 0 0;
+        cursor: move; /* Indicador visual de que se puede arrastrar */
+        user-select: none; /* Evitar selección de texto al arrastrar */
+    }
+
+    .route-info-header h6 {
+        margin: 0;
+        font-size: 1rem;
+        font-weight: 600;
+        pointer-events: none; /* Evitar que el texto interfiera con el arrastre */
+    }
+
+    .route-info-header .btn-close {
+        filter: invert(1);
+        opacity: 0.8;
+    }
+
+    .route-info-header .btn-close:hover {
+        opacity: 1;
+    }
+
+    .route-info-body {
+        padding: 15px;
+        font-size: 0.95rem;
+    }
+
+    .route-info-body strong {
+        color: #333;
+    }
+
+    /* Responsive adjustments */
+        @@media (max-width: 768px) {
+            #route-info-container {
+                right: 10px;
+                top: 10px;
+            }
+
+            .route-info-panel {
+                min-width: 250px;
+                max-width: 280px;
+            }
+        }
+    
+            /* ==================== MAP HEADER CONTROLS STYLES ==================== */
+            .map-header-controls .form-select {
+                min-width: 220px; /* Make selector a bit longer */
+            }
+        
+            .map-header-controls .form-select,
+            .map-header-controls .btn {
+                padding-top: 0.45rem; /* Make a bit taller */
+                padding-bottom: 0.45rem; /* Make a bit taller */
+                font-size: 0.9rem;
+                height: auto;
+            }
+        
+            .map-header-controls .btn {
+                padding-left: 1rem;
+                padding-right: 1rem;
+                white-space: nowrap; /* Ensure text fits on one line */
+            }
+
+    .location-marker .dot {
+        width: 10px;
+        height: 10px;
+        background: #007bff;
+        border-radius: 50%;
+        border: 2px solid white;
+        box-shadow: 0 0 5px rgba(0, 0, 0, 0.5);
+    }
+
+    .location-marker .pulse {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: #007bff;
+        position: absolute;
+        top: -5px;
+        left: -5px;
+        animation: pulse 1.5s infinite;
+        opacity: 0.5;
+    }
+
+    @@keyframes pulse {
+        0% {
+            transform: scale(0.5);
+            opacity: 0.5;
+        }
+        50% {
+            opacity: 1;
+        }
+        100% {
+            transform: scale(1.5);
+            opacity: 0;
+        }
+    }
+</style>
+
+<!-- Leaflet JavaScript -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+
+<script>
+    let map;
+    let markers = {};
+    let mapInitialized = false;
+
+    // Route rendering variables
+    let routeLayer = null;
+    let routeStartMarker = null;
+    let routeEndMarker = null;
+
+    // Function to translate animal status from English to Spanish
+    function translateStatus(status) {
+        const statusMap = {
+            'healthy': 'Saludable',
+            'sick': 'Enfermo',
+            'monitoring': 'En observación'
+        };
+        return statusMap[status?.toLowerCase()] || status || 'Saludable';
+    }
+
+    // Function to open popup for specific animal
+    window.openAnimalPopup = function(animalId) {
+        console.log(`Opening popup for animal ${animalId}`);
+
+        // Close all existing popups first
+        if (window.centerMarker) {
+            window.centerMarker.closePopup();
+        }
+        Object.values(markers).forEach(marker => {
+            marker.closePopup();
+        });
+
+        // Open popup for the selected animal
+        if (markers[animalId]) {
+            markers[animalId].openPopup();
+        } else if (window.centerMarker && window.centerMarker.animalId === animalId) {
+            window.centerMarker.openPopup();
+        }
+    };
+
+    // Función para esperar a que Leaflet se cargue
+    function waitForLeaflet(callback, maxAttempts = 50) {
+        let attempts = 0;
+        const checkLeaflet = () => {
+            attempts++;
+            if (typeof L !== 'undefined') {
+                console.log("Leaflet is ready!");
+                callback();
+            } else if (attempts < maxAttempts) {
+                console.log(`Waiting for Leaflet... attempt ${attempts}`);
+                setTimeout(checkLeaflet, 200);
+            } else {
+                console.error("Leaflet failed to load after maximum attempts");
+            }
+        };
+        checkLeaflet();
+    }
+
+    // Clean up existing map
+    window.cleanupMap = function() {
+        console.log("cleanupMap called");
+
+        try {
+            if (map) {
+                console.log("Removing existing map");
+                map.remove();
+                map = null;
+            }
+
+            // Clear markers
+            markers = {};
+
+            // Clear center marker
+            if (window.centerMarker) {
+                window.centerMarker = null;
+            }
+
+            mapInitialized = false;
+
+            console.log("Map cleanup completed");
+        } catch (error) {
+            console.error("Error during map cleanup:", error);
+        }
+    };
+
+    // Force reinitialize map (always creates new map instance)
+    window.reinitializeMap = function() {
+        console.log("reinitializeMap called");
+
+        // Always clean up first
+        window.cleanupMap();
+
+        const mapElement = document.getElementById("map");
+        if (!mapElement) {
+            console.error("Map element not found - retrying in 500ms");
+            setTimeout(() => window.reinitializeMap(), 500);
+            return;
+        }
+
+        console.log("Map element found, waiting for Leaflet...");
+
+        waitForLeaflet(() => {
+            try {
+                console.log("Initializing fresh Leaflet map...");
+
+                // Clear the map container content
+                mapElement.innerHTML = '';
+
+                // Initialize new map centered in Entre Ríos, Argentina
+                map = L.map('map', {
+                    center: [-33.0167, -58.5167],
+                    zoom: 15,
+                    zoomControl: true
+                });
+
+                // Add OpenStreetMap base layer
+                const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                    maxZoom: 19
+                });
+
+                osmLayer.addTo(map);
+
+                // Wait for map to render completely
+                map.whenReady(() => {
+                    console.log("Fresh map is ready and rendered");
+                    mapInitialized = true;
+
+                    // Invalidate size to ensure proper rendering
+                    setTimeout(() => {
+                        map.invalidateSize();
+                        console.log("Fresh map size invalidated");
+                    }, 200);
+                });
+
+                console.log("Fresh OpenStreetMap initialized successfully");
+
+            } catch (error) {
+                console.error("Error initializing fresh map:", error);
+                mapInitialized = false;
+            }
+        });
+    };
+
+    // Legacy function for backward compatibility
+    window.initializeMap = function() {
+        console.log("initializeMap called - redirecting to reinitializeMap");
+        window.reinitializeMap();
+    };
+
+    // Nueva variable para controlar si mostrar todos los popups
+    let showAllPopups = true;
+
+    // Mantener compatibilidad con llamadas anteriores
+    window.updateMapMarkers = function(animalsData, openAllPopups) {
+        // Si openAllPopups es undefined, establecer por defecto a true
+        if (typeof openAllPopups === 'undefined') {
+            openAllPopups = true;
+        }
+        console.log("updateMapMarkers called with data:", animalsData, "openAllPopups:", openAllPopups);
+
+        if (!map || !mapInitialized) {
+            console.warn("Map not ready, retrying in 1 second...");
+            setTimeout(() => window.updateMapMarkers(animalsData, openAllPopups), 1000);
+            return;
+        }
+
+        if (!animalsData || animalsData.length === 0) {
+            console.warn("No animals data provided");
+            return;
+        }
+
+        try {
+            // Limpiar marcadores existentes SOLAMENTE
+            console.log(`Clearing ${Object.keys(markers).length} existing markers`);
+            Object.values(markers).forEach(marker => {
+                map.removeLayer(marker);
+            });
+            markers = {};
+
+            console.log(`Processing ${animalsData.length} animals`);
+
+            // Array para ajustar bounds del mapa
+            const markerLatLngs = [];
+
+            // Agregar nuevos marcadores
+            animalsData.forEach(animal => {
+                console.log("Processing animal:", animal);
+
+                // Verificar que el animal tenga ubicación
+                if (!animal.currentLocation || !animal.currentLocation.latitude || !animal.currentLocation.longitude) {
+                    console.warn("Animal has no location data:", animal);
+                    return;
+                }
+
+                const latLng = [animal.currentLocation.latitude, animal.currentLocation.longitude];
+                markerLatLngs.push(latLng);
+
+                console.log(`Adding marker for ${animal.name} at ${latLng}`);
+
+                // Determinar estado de conexión basado en timestamp de la ubicación
+                const now = new Date();
+                const locationTime = new Date(animal.currentLocation.timestamp);
+                const timeDiffMinutes = (now - locationTime) / (1000 * 60); // Diferencia en minutos
+                const isConnected = timeDiffMinutes <= 10; // Conectado si la ubicación es de hace menos de 10 minutos
+
+                // Elegir color del marcador según estado de conexión y salud
+                let markerColor = '#4285f4'; // azul por defecto
+                let connectionStatus = '';
+
+                if (!isConnected) {
+                    markerColor = '#6c757d'; // gris para desconectado
+                    connectionStatus = 'Desconectado';
+                } else {
+                    const status = animal.status?.toLowerCase() || '';
+                    connectionStatus = 'Conectado';
+
+                    if (status === 'healthy' || status === 'saludable') {
+                        markerColor = '#34a853'; // verde
+                    } else if (status === 'sick' || status === 'enfermo') {
+                        markerColor = '#ea4335'; // rojo
+                    } else if (status === 'monitoring' || status === 'en observación') {
+                        markerColor = '#fbbc04'; // amarillo
+                    }
+                }
+
+                // Crear icono de vaca personalizado
+                const cowIcon = L.divIcon({
+                    html: `
+                        <div class="cow-marker-with-pulse" style="
+                            background-color: ${markerColor};
+                            border: 3px solid #fff;
+                            border-radius: 50%;
+                            width: 35px;
+                            height: 35px;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            font-size: 18px;
+                            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+                            cursor: pointer;
+                        ">
+                            🐄
+                        </div>
+                    `,
+                    className: 'custom-cow-marker',
+                    iconSize: [35, 35],
+                    iconAnchor: [17, 17]
+                });
+
+                // Crear marcador con icono de vaca
+                const marker = L.marker(latLng, { icon: cowIcon });
+
+                // Popup con información del animal
+                const popupContent = `
+                    <div style="min-width: 200px;">
+                        <h6 style="margin: 0 0 8px 0; font-weight: bold; color: #333;">${animal.name}</h6>
+                        ${animal.tag ? `<p style="margin: 4px 0;"><strong>Tag:</strong> ${animal.tag}</p>` : ''}
+                        <p style="margin: 4px 0;"><strong>Conexión:</strong> <span style="color: ${isConnected ? '#28a745' : '#dc3545'}; font-weight: bold;">${connectionStatus}</span></p>
+                        <p style="margin: 4px 0;"><strong>Estado:</strong> ${translateStatus(animal.status)}</p>
+                        <p style="margin: 4px 0;"><strong>Coordenadas:</strong> ${latLng[0].toFixed(6)}, ${latLng[1].toFixed(6)}</p>
+                        <p style="margin: 4px 0;"><strong>Velocidad:</strong> ${animal.currentLocation.speed || 0} km/h</p>
+                        <p style="margin: 4px 0;"><strong>Temperatura:</strong> ${animal.currentLocation.temperature || 'N/A'}°C</p>
+                        <p style="margin: 4px 0;"><strong>Altitud:</strong> ${animal.currentLocation.altitude || 'N/A'} m</p>
+                        <p style="margin: 4px 0;"><strong>Actividad:</strong> ${animal.currentLocation.activityLevel || 'N/A'}</p>
+                        <p style="margin: 4px 0;"><strong>Última actualización:</strong> ${new Date(animal.currentLocation.timestamp).toLocaleTimeString()}</p>
+                    </div>
+                `;
+
+                marker.bindPopup(popupContent);
+
+                // Configurar eventos de hover para mostrar/ocultar popup dinámicamente
+                marker.on('mouseover', function() {
+                    // Cerrar todos los otros popups primero
+                    Object.values(markers).forEach(m => {
+                        if (m !== marker) {
+                            m.closePopup();
+                        }
+                    });
+                    // Cerrar center marker si existe
+                    if (window.centerMarker) {
+                        window.centerMarker.closePopup();
+                    }
+                    // Abrir el popup de este marcador
+                    marker.openPopup();
+                });
+
+                marker.on('mouseout', function() {
+                    // Cerrar el popup cuando el mouse sale del marcador
+                    setTimeout(() => {
+                        marker.closePopup();
+                    }, 100); // Pequeño delay para evitar parpadeo
+                });
+
+                // También mantener funcionalidad de click para selección individual
+                marker.on('click', function() {
+                    console.log(`Animal ${animal.name} clicked for individual tracking`);
+                    // Aquí puedes agregar lógica adicional si quieres que el click haga algo específico
+                });
+
+                marker.addTo(map);
+                markers[animal.id] = marker;
+
+                console.log(`✅ Marker successfully added for ${animal.name} (ID: ${animal.id}) with color ${markerColor}`);
+            });
+
+            // Ajustar vista del mapa para mostrar todos los marcadores
+            console.log(`📍 MARKER SUMMARY: Created ${markerLatLngs.length} markers from ${animalsData.length} animals`);
+            console.log(`📍 Total markers in collection: ${Object.keys(markers).length}`);
+
+            if (markerLatLngs.length > 0) {
+                console.log(`Adjusting map view for ${markerLatLngs.length} markers`);
+
+                // Solo ajustar el zoom en la carga inicial o cuando cambia significativamente el número de markers
+                const isInitialLoad = !window.lastMarkerCount || Math.abs(window.lastMarkerCount - markerLatLngs.length) > 2;
+
+                if (isInitialLoad) {
+                    console.log("📍 Initial load or significant marker change - adjusting zoom");
+
+                    if (markerLatLngs.length === 1) {
+                        // Si solo hay un marcador, centrar en él con zoom consistente
+                        map.setView(markerLatLngs[0], 16);
+                        console.log(`Centered map on single marker at ${markerLatLngs[0]}`);
+                    } else {
+                        // Para múltiples marcadores, usar un zoom fijo que permita ver bien la separación
+                        const group = new L.featureGroup(Object.values(markers));
+                        const bounds = group.getBounds();
+
+                        // Expandir bounds para dar espacio entre markers
+                        const expandedBounds = bounds.pad(0.5);
+
+                        // Usar fitBounds con configuración de zoom original
+                        map.fitBounds(expandedBounds, {
+                            padding: [50, 50],
+                            maxZoom: 13,
+                            minZoom: 11
+                        });
+
+                        console.log(`✅ Initial bounds fitted for ${Object.keys(markers).length} markers with stable zoom`);
+                    }
+
+                    // Recordar cuántos markers tenemos
+                    window.lastMarkerCount = markerLatLngs.length;
+                } else {
+                    // En actualizaciones regulares, solo actualizar posiciones sin cambiar zoom
+                    console.log("🔄 Regular update - maintaining current zoom level");
+
+                    // Solo centrar suavemente en el área de los markers sin cambiar zoom
+                    if (markerLatLngs.length > 1) {
+                        const group = new L.featureGroup(Object.values(markers));
+                        const bounds = group.getBounds();
+                        const center = bounds.getCenter();
+
+                        // Mover suavemente el centro del mapa sin cambiar zoom
+                        const currentZoom = map.getZoom();
+                        map.setView(center, currentZoom, { animate: true, duration: 1 });
+
+                        console.log(`📍 Gently centered map at ${center.lat}, ${center.lng} with zoom ${currentZoom}`);
+                    }
+                }
+
+                // No abrir automáticamente ningún popup - solo configurar el estado
+                showAllPopups = openAllPopups;
+                console.log(`✅ Map updated with ${Object.keys(markers).length} cow markers (hover to see details)`);
+
+                // Asegurar renderizado correcto
+                setTimeout(() => {
+                    map.invalidateSize();
+                    console.log("✅ Map size invalidated");
+                }, 150);
+            } else {
+                console.warn("⚠️ No valid animal locations found - no markers to display");
+            }
+
+        } catch (error) {
+            console.error("Error updating map markers:", error);
+        }
+    };
+
+    // Función para resetear el contador de markers (usado cuando se cambia de granja)
+    window.resetMapState = function() {
+        console.log("🔄 Resetting map state for new farm selection");
+        window.lastMarkerCount = null; // Esto forzará un reajuste inicial del zoom
+    };
+
+    // Nueva función para mostrar solo un animal específico
+    window.showSingleAnimal = function(animalId) {
+        console.log(`showSingleAnimal called for animal ${animalId}`);
+        showAllPopups = false;
+
+        // Cerrar todos los popups primero
+        Object.values(markers).forEach(marker => {
+            marker.closePopup();
+        });
+
+        // Cerrar center marker si existe
+        if (window.centerMarker) {
+            map.removeLayer(window.centerMarker);
+            window.centerMarker = null;
+        }
+
+        // Abrir solo el popup del animal seleccionado
+        const selectedMarker = markers[animalId];
+        if (selectedMarker) {
+            selectedMarker.openPopup();
+            map.setView(selectedMarker.getLatLng(), 17);
+            console.log(`✅ Showing only animal ${animalId}`);
+        }
+    };
+
+    // Nueva función para mostrar todos los animales
+    window.showAllAnimals = function() {
+        console.log("showAllAnimals called");
+        showAllPopups = true;
+
+        // Cerrar cualquier popup que esté abierto
+        Object.values(markers).forEach(marker => {
+            marker.closePopup();
+        });
+        if (window.centerMarker) {
+            window.centerMarker.closePopup();
+        }
+
+        // Remover el marker central si existe
+        if (window.centerMarker) {
+            map.removeLayer(window.centerMarker);
+            window.centerMarker = null;
+        }
+
+        // Ajustar vista para mostrar todos con zoom estable
+        if (Object.keys(markers).length > 0) {
+            const group = new L.featureGroup(Object.values(markers));
+            const bounds = group.getBounds();
+            const expandedBounds = bounds.pad(0.5);
+
+            // Usar zoom estable para vista completa
+            map.fitBounds(expandedBounds, {
+                padding: [50, 50],
+                maxZoom: 13,
+                minZoom: 11
+            });
+        }
+
+        console.log(`✅ Showing all ${Object.keys(markers).length} animals with stable zoom (hover to see details)`);
+    };
+
+    // Enhanced animal centering with detailed coordinates display including speed
+    window.centerMapOnAnimalWithDetails = function(animalId, lat, lng, animalName, tag, status, speed) {
+        console.log(`centerMapOnAnimalWithDetails called for animal ${animalId} (${animalName}) at ${lat}, ${lng} with speed ${speed} km/h`);
+
+        if (!map || !mapInitialized) {
+            console.warn("Map not ready for centering");
+            return;
+        }
+
+        try {
+            // FIX: Use the existing marker instead of creating a new one, and open the popup after the map animates.
+
+            const existingMarker = markers[animalId];
+            if (!existingMarker) {
+                console.warn(`No existing marker found for animal ${animalId}`);
+                console.log('Available markers:', Object.keys(markers));
+                return;
+            }
+
+            console.log(`✅ Found existing marker for animal ${animalId}`);
+
+            // Animate map to the marker's position and open the popup on arrival.
+            map.flyTo([lat, lng], 18).once('moveend', () => {
+                // Close all other popups first to avoid clutter
+                Object.entries(markers).forEach(([id, marker]) => {
+                    if (parseInt(id) !== animalId) {
+                        marker.closePopup();
+                    }
+                });
+
+                // Open the popup of the existing marker
+                existingMarker.openPopup();
+                console.log(`✅ Popup opened for existing marker of ${animalName}`);
+            });
+            console.log(`✅ Popup opened for existing marker of ${animalName}`);
+
+            return; // Exit early - don't create a new marker
+
+            // === OLD CODE BELOW (no longer executed) ===
+
+            // Determine marker color based on health status
+            let markerColor = '#ff4444'; // Default red
+            switch (status?.toLowerCase()) {
+                case 'healthy':
+                    markerColor = '#28a745'; // Green for healthy
+                    break;
+                case 'sick':
+                    markerColor = '#dc3545'; // Red for sick
+                    break;
+                case 'monitoring':
+                    markerColor = '#ffc107'; // Yellow for monitoring
+                    break;
+                default:
+                    markerColor = '#6c757d'; // Gray for unknown
+            }
+
+            // Create a special center marker with cow icon
+            const cowIcon = L.divIcon({
+                html: `
+                    <div class="cow-marker-with-pulse" style="
+                        background-color: ${markerColor};
+                        border: 3px solid #fff;
+                        border-radius: 50%;
+                        width: 40px;
+                        height: 40px;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        font-size: 20px;
+                        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+                    ">
+                        🐄
+                    </div>
+                `,
+                className: 'custom-cow-marker',
+                iconSize: [40, 40],
+                iconAnchor: [20, 20]
+            });
+
+
+            // Create center marker with modern popup
+            window.centerMarker = L.marker([lat, lng], { icon: cowIcon }).addTo(map);
+            window.centerMarker.animalId = animalId;
+
+            // POPUP MODERNO Y COMPACTO
+            const modernPopup = `
+                <div style="
+                    min-width: 200px;
+                    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                    background: rgba(255, 255, 255, 0.95);
+                    backdrop-filter: blur(10px);
+                    border-radius: 12px;
+                    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+                    border: 1px solid rgba(255, 255, 255, 0.2);
+                    padding: 0;
+                    overflow: hidden;
+                ">
+                    <!-- Header -->
+                    <div style="
+                        background: ${markerColor};
+                        color: white;
+                        padding: 8px 12px;
+                        display: flex;
+                        align-items: center;
+                        gap: 8px;
+                    ">
+                        <span style="font-size: 16px;">🐄</span>
+                        <div>
+                            <div style="font-weight: 600; font-size: 14px;">${animalName}</div>
+                            <div style="font-size: 11px; opacity: 0.9;">${tag}</div>
+                        </div>
+                    </div>
+
+                    <!-- Content -->
+                    <div style="padding: 12px;">
+                        <!-- Coordinates -->
+                        <div style="
+                            background: rgba(0, 123, 255, 0.05);
+                            border-left: 3px solid ${markerColor};
+                            padding: 8px;
+                            border-radius: 4px;
+                            margin-bottom: 8px;
+                        ">
+                            <div style="font-size: 11px; color: #666; margin-bottom: 4px;">📍 Coordenadas</div>
+                            <div style="font-family: monospace; font-size: 12px; color: #333;">
+                                <div>${lat.toFixed(6)}</div>
+                                <div>${lng.toFixed(6)}</div>
+                            </div>
+                        </div>
+
+                        <!-- Speed Information -->
+                        <div style="
+                            background: rgba(40, 167, 69, 0.05);
+                            border-left: 3px solid ${getSpeedColor(speed)};
+                            padding: 8px;
+                            border-radius: 4px;
+                            margin-bottom: 8px;
+                        ">
+                            <div style="font-size: 11px; color: #666; margin-bottom: 4px;">🏃 Velocidad</div>
+                            <div style="
+                                font-family: 'Segoe UI', sans-serif;
+                                font-size: 14px;
+                                font-weight: 600;
+                                color: ${getSpeedColor(speed)};
+                            ">
+                                ${speed.toFixed(1)} km/h
+                            </div>
+                            <div style="font-size: 10px; color: #888; margin-top: 2px;">
+                                ${getSpeedDescription(speed)}
+                            </div>
+                        </div>
+
+                        <!-- Status and Time -->
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span style="
+                                background: ${getStatusColor(status)};
+                                color: white;
+                                padding: 4px 8px;
+                                border-radius: 20px;
+                                font-size: 10px;
+                                font-weight: 600;
+                                text-transform: uppercase;
+                            ">${translateStatus(status)}</span>
+                            <span style="font-size: 10px; color: #999;">
+                                ${new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Bind modern popup to center marker
+            window.centerMarker.bindPopup(modernPopup, {
+                maxWidth: 220,
+                className: 'custom-popup modern-popup'
+            });
+
+            // IMPORTANT: Open the popup immediately when animal card is clicked
+            setTimeout(() => {
+                window.centerMarker.openPopup();
+                console.log(`✅ Popup opened automatically for ${animalName}`);
+            }, 100);
+
+            // Add click event to center marker to open popup and close others
+            window.centerMarker.on('click', function() {
+                // Close all other popups first
+                Object.values(markers).forEach(marker => {
+                    marker.closePopup();
+                });
+                // The clicked marker's popup will open automatically due to bindPopup
+            });
+
+            // Also highlight the original marker if it exists
+            const originalMarker = markers[animalId];
+            if (originalMarker) {
+                // Change the original marker style to indicate selection
+                originalMarker.setStyle({
+                    radius: 15,
+                    weight: 4,
+                    color: '#fff',
+                    fillColor: '#ff4444',
+                    fillOpacity: 1
+                });
+
+                // Reset other markers to normal style
+                Object.entries(markers).forEach(([id, marker]) => {
+                    if (parseInt(id) !== animalId) {
+                        marker.setStyle({
+                            radius: 10,
+                            weight: 3,
+                            fillOpacity: 0.9
+                        });
+                    }
+                });
+            }
+
+            console.log(`Enhanced centering completed for ${animalName} at exact coordinates: ${lat.toFixed(8)}, ${lng.toFixed(8)}`);
+
+        } catch (error) {
+            console.error("Error centering map on animal with details:", error);
+        }
+    };
+
+    // Helper function to get status color
+    function getStatusColor(status) {
+        switch (status?.toLowerCase()) {
+            case 'healthy': return '#28a745';
+            case 'sick': return '#dc3545';
+            case 'monitoring': return '#ffc107';
+            default: return '#6c757d';
+        }
+    }
+
+    // Helper function to get speed color based on movement
+    function getSpeedColor(speed) {
+        if (speed === 0) return '#6c757d'; // Gray for stationary
+        if (speed <= 2) return '#28a745'; // Green for slow/walking
+        if (speed <= 8) return '#ffc107'; // Yellow for moderate movement
+        return '#dc3545'; // Red for fast movement
+    }
+
+    // Helper function to get speed description
+    function getSpeedDescription(speed) {
+        if (speed === 0) return 'Estacionario';
+        if (speed <= 1) return 'Pastando';
+        if (speed <= 3) return 'Caminando lento';
+        if (speed <= 6) return 'Caminando';
+        if (speed <= 10) return 'Movimiento rápido';
+        return 'Corriendo';
+    }
+
+    // Real-time position update for selected animal
+    window.updateSelectedAnimalPosition = function(animalId, lat, lng, animalName, tag, status, speed) {
+        console.log(`updateSelectedAnimalPosition called for animal ${animalId} (${animalName}) - new position: ${lat}, ${lng}, speed: ${speed} km/h`);
+
+        if (!map || !mapInitialized) {
+            console.warn("Map not ready for position update");
+            return;
+        }
+
+        try {
+            // Update center marker position if it exists
+            if (window.centerMarker) {
+                console.log("Updating center marker position");
+
+                // Update marker position with smooth animation
+                const newLatLng = [lat, lng];
+                window.centerMarker.setLatLng(newLatLng);
+
+                // Update marker color based on status
+                let markerColor = '#ff4444'; // Default red
+                switch (status?.toLowerCase()) {
+                    case 'healthy':
+                        markerColor = '#28a745'; // Green for healthy
+                        break;
+                    case 'sick':
+                        markerColor = '#dc3545'; // Red for sick
+                        break;
+                    case 'monitoring':
+                        markerColor = '#ffc107'; // Yellow for monitoring
+                        break;
+                    default:
+                        markerColor = '#6c757d'; // Gray for unknown
+                }
+
+                // Update the marker icon with new color and pulse animation
+                const updatedCowIcon = L.divIcon({
+                    html: `
+                        <div class="cow-marker-with-pulse" style="
+                            background-color: ${markerColor};
+                            border: 3px solid #fff;
+                            border-radius: 50%;
+                            width: 40px;
+                            height: 40px;
+                            display: flex;
+                            align-items: center;
+                            justify-content: center;
+                            font-size: 20px;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+                        ">
+                            🐄
+                        </div>
+                    `,
+                    className: 'custom-cow-marker',
+                    iconSize: [40, 40],
+                    iconAnchor: [20, 20]
+                });
+
+                window.centerMarker.setIcon(updatedCowIcon);
+
+                // Update popup content with new information
+                const updatedPopup = `
+                    <div style="
+                        min-width: 200px;
+                        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                        background: rgba(255, 255, 255, 0.95);
+                        backdrop-filter: blur(10px);
+                        border-radius: 12px;
+                        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+                        border: 1px solid rgba(255, 255, 255, 0.2);
+                        padding: 0;
+                        overflow: hidden;
+                    ">
+                        <!-- Header -->
+                        <div style="
+                            background: ${markerColor};
+                            color: white;
+                            padding: 8px 12px;
+                            display: flex;
+                            align-items: center;
+                            gap: 8px;
+                        ">
+                            <span style="font-size: 16px;">🐄</span>
+                            <div>
+                                <div style="font-weight: 600; font-size: 14px;">${animalName}</div>
+                                <div style="font-size: 11px; opacity: 0.9;">${tag}</div>
+                            </div>
+                        </div>
+
+                        <!-- Content -->
+                        <div style="padding: 12px;">
+                            <!-- Coordinates -->
+                            <div style="
+                                background: rgba(0, 123, 255, 0.05);
+                                border-left: 3px solid ${markerColor};
+                                padding: 8px;
+                                border-radius: 4px;
+                                margin-bottom: 8px;
+                            ">
+                                <div style="font-size: 11px; color: #666; margin-bottom: 4px;">📍 Coordenadas</div>
+                                <div style="font-family: monospace; font-size: 12px; color: #333;">
+                                    <div>${lat.toFixed(6)}</div>
+                                    <div>${lng.toFixed(6)}</div>
+                                </div>
+                            </div>
+
+                            <!-- Speed Information -->
+                            <div style="
+                                background: rgba(40, 167, 69, 0.05);
+                                border-left: 3px solid ${getSpeedColor(speed)};
+                                padding: 8px;
+                                border-radius: 4px;
+                                margin-bottom: 8px;
+                            ">
+                                <div style="font-size: 11px; color: #666; margin-bottom: 4px;">🏃 Velocidad</div>
+                                <div style="
+                                    font-family: 'Segoe UI', sans-serif;
+                                    font-size: 14px;
+                                    font-weight: 600;
+                                    color: ${getSpeedColor(speed)};
+                                ">
+                                    ${speed.toFixed(1)} km/h
+                                </div>
+                                <div style="font-size: 10px; color: #888; margin-top: 2px;">
+                                    ${getSpeedDescription(speed)}
+                                </div>
+                            </div>
+
+                            <!-- Status and Time -->
+                            <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span style="
+                                    background: ${getStatusColor(status)};
+                                    color: white;
+                                    padding: 4px 8px;
+                                    border-radius: 20px;
+                                    font-size: 10px;
+                                    font-weight: 600;
+                                    text-transform: uppercase;
+                                ">${translateStatus(status)}</span>
+                                <span style="font-size: 10px; color: #999;">
+                                    ${new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
+                                </span>
+                            </div>
+
+                            <!-- Real-time indicator -->
+                            <div style="
+                                background: rgba(40, 167, 69, 0.1);
+                                border: 1px solid rgba(40, 167, 69, 0.3);
+                                padding: 4px 8px;
+                                border-radius: 4px;
+                                margin-top: 8px;
+                                text-align: center;
+                            ">
+                                <small style="color: #28a745; font-weight: 600;">
+                                    ⚡ Actualización en tiempo real
+                                </small>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                // Update the popup content
+                window.centerMarker.setPopupContent(updatedPopup);
+
+                // Optionally keep the map centered on the moving animal
+                // Uncomment the next line if you want the map to follow the animal
+                // map.setView(newLatLng, map.getZoom());
+
+                console.log(`Successfully updated position for ${animalName} to ${lat}, ${lng} with speed ${speed} km/h`);
+            }
+
+            // Also update the original marker in the markers collection if it exists
+            const originalMarker = markers[animalId];
+            if (originalMarker) {
+                originalMarker.setLatLng([lat, lng]);
+                console.log(`Also updated original marker for animal ${animalId}`);
+            }
+
+        } catch (error) {
+            console.error("Error updating selected animal position:", error);
+        }
+    };
+
+    // Simple function to center map without creating special markers
+    window.centerMapOnAnimal = function(lat, lng) {
+        console.log(`centerMapOnAnimal called for coordinates ${lat}, ${lng}`);
+
+        if (!map || !mapInitialized) {
+            console.warn("Map not ready for centering");
+            return;
+        }
+
+        try {
+            // Simply center the map without creating any special markers
+            map.setView([lat, lng], 16);
+            console.log(`Map centered on coordinates: ${lat}, ${lng}`);
+        } catch (error) {
+            console.error("Error centering map:", error);
+        }
+    };
+
+    // Función de debugging para inspeccionar el estado del mapa
+    window.debugMap = function() {
+        console.log("Map debug info:");
+        console.log("- Map object:", map);
+        console.log("- Map initialized:", mapInitialized);
+        console.log("- Markers count:", Object.keys(markers).length);
+        console.log("- Leaflet available:", typeof L !== 'undefined');
+        console.log("- Farm boundaries count:", farmBoundaries ? farmBoundaries.length : 0);
+    };
+
+    // Variables for farm boundaries
+    let farmBoundaries = [];
+
+    // Function to add farm boundary to map
+    window.addFarmBoundary = function(farmId, farmName, coordinates) {
+        console.log(`Adding boundary for farm ${farmName} (ID: ${farmId}) with ${coordinates.length} points`);
+
+        if (!map || !mapInitialized) {
+            console.warn("Map not ready for adding boundaries");
+            return;
+        }
+
+        try {
+            // Convert coordinates to Leaflet format
+            const latlngs = coordinates.map(coord => [coord.lat, coord.lng]);
+
+            // Create polygon
+            const polygon = L.polygon(latlngs, {
+                color: '#3388ff',
+                weight: 3,
+                opacity: 0.8,
+                fillColor: '#3388ff',
+                fillOpacity: 0.1
+            }).addTo(map);
+
+            // Add popup with farm name
+            polygon.bindPopup(`
+                <div style="text-align: center; padding: 5px;">
+                    <strong>🏛️ ${farmName}</strong><br>
+                    <small>Área de Geofencing</small><br>
+                    <small>${coordinates.length} puntos</small>
+                </div>
+            `);
+
+            // Store boundary reference
+            farmBoundaries.push({
+                farmId: farmId,
+                farmName: farmName,
+                polygon: polygon
+            });
+
+            console.log(`✅ Boundary added for farm ${farmName}`);
+        } catch (error) {
+            console.error(`Error adding boundary for farm ${farmName}:`, error);
+        }
+    };
+
+    // Function to clear all farm boundaries
+    window.clearAllBoundaries = function() {
+        console.log("Clearing all farm boundaries");
+
+        if (!map) {
+            console.warn("Map not available for clearing boundaries");
+            return;
+        }
+
+        // Remove all polygons from map
+        farmBoundaries.forEach(boundary => {
+            try {
+                map.removeLayer(boundary.polygon);
+            } catch (error) {
+                console.error("Error removing boundary:", error);
+            }
+        });
+
+        // Clear the array
+        farmBoundaries = [];
+        console.log("✅ All farm boundaries cleared");
+    };
+
+    // ==================== GPS NAVIGATION FUNCTIONS ====================
+
+    // Draws a route on the map between user location and animal
+    // routeData: Route data with coordinates, distance, duration
+    window.drawRoute = function(routeData) {
+        console.log("drawRoute called with data:", routeData);
+        window.clearRoute(); // Clear any existing route first
+
+        if (!map || !mapInitialized) {
+            console.warn("Map not initialized");
+            return;
+        }
+
+        try {
+            // Convert coordinates and get start/end points
+            const latlngs = routeData.coordinates.map(coord => [coord.latitude, coord.longitude]);
+            if (latlngs.length < 2) {
+                console.warn("Route has less than 2 points, cannot draw.");
+                return;
+            }
+            const startPoint = latlngs[0];
+            const endPoint = latlngs[latlngs.length - 1];
+
+            // Create route polyline
+            routeLayer = L.polyline(latlngs, {
+                color: '#0d6efd', weight: 6, opacity: 0.8, lineJoin: 'round'
+            }).addTo(map);
+
+            // --- Start marker (user location) ---
+            const startIcon = L.divIcon({
+                className: 'location-marker',
+                html: '<div class="pulse"></div><div class="dot"></div>',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+            });
+            routeStartMarker = L.marker(startPoint, { icon: startIcon }).addTo(map).bindPopup("Tu ubicación");
+
+            // --- End marker (destination) ---
+            const endIcon = L.divIcon({
+                className: 'destination-pin-marker',
+                html: '<div><i class="fas fa-map-marker-alt fa-3x" style="color: #dc3545;"></i></div>',
+                iconSize: [30, 42],
+                iconAnchor: [15, 42] // bottom center of the icon
+            });
+            routeEndMarker = L.marker(endPoint, { icon: endIcon }).addTo(map).bindPopup(routeData.animalName || "Destino");
+
+            // Fit map to route
+            map.fitBounds(routeLayer.getBounds(), { padding: [60, 60], maxZoom: 17 });
+
+            console.log("✅ Route drawn successfully");
+        } catch (error) {
+            console.error("Error drawing route:", error);
+        }
+    };
+
+    /**
+     * Clears the active route from the map
+     */
+    window.clearRoute = function() {
+        console.log("clearRoute called");
+
+        if (routeLayer) {
+            map.removeLayer(routeLayer);
+            routeLayer = null;
+        }
+
+        if (routeStartMarker) {
+            map.removeLayer(routeStartMarker);
+            routeStartMarker = null;
+        }
+
+        if (routeEndMarker) {
+            map.removeLayer(routeEndMarker);
+            routeEndMarker = null;
+        }
+
+        console.log("✅ Route cleared");
+    };
+
+    /**
+     * Updates only the end marker position when animal moves slightly
+     * @@param {number} lat - New latitude
+     * @@param {number} lng - New longitude
+     */
+    window.updateRouteEndMarker = function(lat, lng) {
+        console.log(`📍 Updating route end marker to (${lat}, ${lng})`);
+
+        if (!routeEndMarker) {
+            console.warn("No route end marker to update");
+            return;
+        }
+
+        try {
+            const newLatLng = [lat, lng];
+            routeEndMarker.setLatLng(newLatLng);
+            routeEndMarker.setPopupContent("Destino (actualizado)");
+            console.log("✅ Route end marker updated successfully");
+        } catch (error) {
+            console.error("Error updating route end marker:", error);
+        }
+    };
+
+    /**
+     * Updates the start marker position (user location) during movement simulation
+     * @@param {number} lat - New latitude
+     * @@param {number} lng - New longitude
+     */
+    window.updateRouteStartMarker = function(lat, lng) {
+        console.log(`🚶 Updating user position marker to (${lat}, ${lng})`);
+
+        if (!routeStartMarker) {
+            console.warn("No route start marker to update");
+            return;
+        }
+
+        try {
+            // Update marker position with smooth animation
+            const newLatLng = [lat, lng];
+            routeStartMarker.setLatLng(newLatLng);
+
+            // Update popup content with current position
+            routeStartMarker.setPopupContent(`Tu ubicación actual<br><small>${lat.toFixed(6)}, ${lng.toFixed(6)}</small>`);
+
+            if (routeStartMarker && routeEndMarker) {
+                const group = new L.featureGroup([routeStartMarker, routeEndMarker]);
+                map.fitBounds(group.getBounds(), { padding: [70, 70], maxZoom: 18, animate: true });
+            }
+
+
+            console.log("✅ User position marker updated successfully");
+        } catch (error) {
+            console.error("Error updating user position marker:", error);
+        }
+    };
+
+    /**
+     * Updates the route polyline to show only remaining path (removes traveled segments)
+     * @@param {Array} remainingCoordinates - Array of {latitude, longitude} for remaining route
+     */
+    window.updateRemainingRoute = function(remainingCoordinates) {
+        console.log(`🛣️ Updating route - showing ${remainingCoordinates.length} remaining points`);
+
+        if (!routeLayer) {
+            console.warn("No route layer to update");
+            return;
+        }
+
+        try {
+            // Convert coordinates to Leaflet format
+            const latLngs = remainingCoordinates.map(coord => [coord.latitude, coord.longitude]);
+
+            // Update the polyline with remaining coordinates
+            routeLayer.setLatLngs(latLngs);
+
+            console.log("✅ Route updated - traveled segments removed");
+        } catch (error) {
+            console.error("Error updating remaining route:", error);
+        }
+    };
+</script>
+
+<!-- Leaflet Decorators for Directional Arrows on Route -->
+<script src="https://unpkg.com/leaflet-polylinedecorator@1.6.0/dist/leaflet.polylineDecorator.js"></script>
+
+<script>
+    // Store decorator for cleanup
+    let routeDecorator = null;
+
+    /**
+     * Enhanced drawRoute with directional arrows
+     */
+    const originalDrawRoute = window.drawRoute;
+    window.drawRoute = function(routeData) {
+        // Call original draw function
+        originalDrawRoute(routeData);
+
+        try {
+            // Remove existing decorator if any
+            if (routeDecorator) {
+                map.removeLayer(routeDecorator);
+                routeDecorator = null;
+            }
+
+            // Add directional arrows along the route
+            if (routeLayer) {
+                routeDecorator = L.polylineDecorator(routeLayer, {
+                    patterns: [
+                        {
+                            offset: '10%',
+                            repeat: 100, // Arrow every 100 pixels
+                            symbol: L.Symbol.arrowHead({
+                                pixelSize: 15,
+                                pathOptions: {
+                                    fillOpacity: 1,
+                                    weight: 0,
+                                    color: '#2196F3'
+                                }
+                            })
+                        }
+                    ]
+                }).addTo(map);
+
+                console.log("✅ Directional arrows added to route");
+            }
+        } catch (error) {
+            console.error("Error adding route decorators:", error);
+        }
+
+        // Note: Panel is now draggable by user, no auto-repositioning
+        console.log("✅ Route drawn - panel can be dragged to desired position");
+    };
+
+    /**
+     * Enhanced clearRoute to also remove decorators
+     */
+    const originalClearRoute = window.clearRoute;
+    window.clearRoute = function() {
+        // Remove decorator first
+        if (routeDecorator) {
+            try {
+                map.removeLayer(routeDecorator);
+                routeDecorator = null;
+                console.log("✅ Route decorators cleared");
+            } catch (error) {
+                console.error("Error clearing decorators:", error);
+            }
+        }
+
+        // Call original clear function
+        originalClearRoute();
+    };
+
+    // Helper function to check if a point is inside a polygon using ray casting
+    function isPointInsidePolygon(point, polygon) {
+        let x = point[0], y = point[1];
+        let inside = false;
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+            let xi = polygon[i][0], yi = polygon[i][1];
+            let xj = polygon[j][0], yj = polygon[j][1];
+            if (((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi)) {
+                inside = !inside;
+            }
+        }
+        return inside;
+    }
+
+    // Helper function to generate a random point inside a polygon
+    window.generatePointInsidePolygon = function(boundaries) {
+        if (!boundaries || boundaries.length < 3) {
+            console.warn("Invalid polygon boundaries");
+            return null;
+        }
+
+        // Convert boundaries to format [lat, lng]
+        // boundaries viene de C# como {lat, lng} (camelCase por JSON.NET)
+        const polygon = boundaries.map(coord => [coord.lat, coord.lng]);
+
+        // Get bounding box
+        const lats = polygon.map(p => p[0]);
+        const lngs = polygon.map(p => p[1]);
+        const minLat = Math.min(...lats);
+        const maxLat = Math.max(...lats);
+        const minLng = Math.min(...lngs);
+        const maxLng = Math.max(...lngs);
+
+        // Try to find a random point inside the polygon (max 100 attempts)
+        for (let i = 0; i < 100; i++) {
+            const randomLat = minLat + Math.random() * (maxLat - minLat);
+            const randomLng = minLng + Math.random() * (maxLng - minLng);
+            const point = [randomLat, randomLng];
+
+            if (isPointInsidePolygon(point, polygon)) {
+                console.log(`✅ Generated point inside polygon: (${randomLat}, ${randomLng})`);
+                // Return with PascalCase for C# interop
+                return { Latitude: randomLat, Longitude: randomLng };
+            }
+        }
+
+        // Fallback: return center of polygon if we couldn't find a point inside
+        const centerLat = (minLat + maxLat) / 2;
+        const centerLng = (minLng + maxLng) / 2;
+        console.warn(`⚠️ Could not generate point inside polygon, using center: (${centerLat}, ${centerLng})`);
+        // Return with PascalCase for C# interop
+        return { Latitude: centerLat, Longitude: centerLng };
+    };
+
+    // ==================== DRAGGABLE ROUTE INFO PANEL ====================
+    (function() {
+        let isDragging = false;
+        let currentX = 0;
+        let currentY = 0;
+        let initialX = 0;
+        let initialY = 0;
+        let xOffset = 0;
+        let yOffset = 0;
+
+        // Initialize drag functionality when the panel appears
+        function initDraggable() {
+            const container = document.getElementById('route-info-container');
+            const header = document.querySelector('.route-info-header');
+
+            if (!container || !header) {
+                // Panel not available yet, try again in 100ms
+                setTimeout(initDraggable, 100);
+                return;
+            }
+
+            // Reset any previous listeners
+            header.removeEventListener('mousedown', dragStart);
+            header.removeEventListener('touchstart', dragStart);
+
+            // Add event listeners
+            header.addEventListener('mousedown', dragStart, false);
+            header.addEventListener('touchstart', dragStart, false);
+
+            console.log('✅ Route info panel is now draggable');
+        }
+
+        function dragStart(e) {
+            const container = document.getElementById('route-info-container');
+            const panel = document.querySelector('.route-info-panel');
+            if (!container) return;
+
+            // Prevent default to avoid text selection
+            if (e.type === 'touchstart') {
+                initialX = e.touches[0].clientX - xOffset;
+                initialY = e.touches[0].clientY - yOffset;
+            } else {
+                initialX = e.clientX - xOffset;
+                initialY = e.clientY - yOffset;
+            }
+
+            // Only start dragging if clicking on the header (not buttons)
+            if (e.target.closest('.btn-close')) return;
+
+            isDragging = true;
+
+            // Add dragging class for visual feedback
+            if (container) container.classList.add('dragging');
+            if (panel) panel.classList.add('dragging');
+
+            // Add move and end listeners
+            document.addEventListener('mousemove', drag, false);
+            document.addEventListener('mouseup', dragEnd, false);
+            document.addEventListener('touchmove', drag, false);
+            document.addEventListener('touchend', dragEnd, false);
+        }
+
+        function drag(e) {
+            if (!isDragging) return;
+
+            e.preventDefault();
+
+            const container = document.getElementById('route-info-container');
+            if (!container) return;
+
+            if (e.type === 'touchmove') {
+                currentX = e.touches[0].clientX - initialX;
+                currentY = e.touches[0].clientY - initialY;
+            } else {
+                currentX = e.clientX - initialX;
+                currentY = e.clientY - initialY;
+            }
+
+            xOffset = currentX;
+            yOffset = currentY;
+
+            // Apply transform to move the panel
+            setTranslate(currentX, currentY, container);
+        }
+
+        function dragEnd(e) {
+            isDragging = false;
+
+            // Remove dragging class
+            const container = document.getElementById('route-info-container');
+            const panel = document.querySelector('.route-info-panel');
+            if (container) container.classList.remove('dragging');
+            if (panel) panel.classList.remove('dragging');
+
+            // Remove move and end listeners
+            document.removeEventListener('mousemove', drag);
+            document.removeEventListener('mouseup', dragEnd);
+            document.removeEventListener('touchmove', drag);
+            document.removeEventListener('touchend', dragEnd);
+        }
+
+        function setTranslate(xPos, yPos, el) {
+            el.style.transform = `translate(${xPos}px, ${yPos}px)`;
+        }
+
+        // Reset position when route is cleared
+        const originalClearRouteFunc = window.clearRoute;
+        window.clearRoute = function() {
+            xOffset = 0;
+            yOffset = 0;
+            const container = document.getElementById('route-info-container');
+            if (container) {
+                container.style.transform = 'translate(0px, 0px)';
+            }
+            originalClearRouteFunc();
+        };
+
+        // Initialize when the page loads
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initDraggable);
+        } else {
+            initDraggable();
+        }
+
+        // Also re-initialize when a new route is drawn
+        const originalDrawRouteFunc = window.drawRoute;
+        window.drawRoute = function(routeData) {
+            originalDrawRouteFunc(routeData);
+            // Reset position when new route is drawn
+            xOffset = 0;
+            yOffset = 0;
+            setTimeout(initDraggable, 200);
+        };
+    })();
+</script>

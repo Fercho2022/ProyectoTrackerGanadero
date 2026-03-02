@@ -1,0 +1,11 @@
+<Router AppAssembly="@typeof(App).Assembly" AdditionalAssemblies="new[] { typeof(TrackerGanadero.Shared.Services.AuthService).Assembly }">
+    <Found Context="routeData">
+        <RouteView RouteData="@routeData" DefaultLayout="@typeof(TrackerGanadero.Shared.Shared.MainLayout)" />
+        <FocusOnNavigate RouteData="@routeData" Selector="h1" />
+    </Found>
+    <NotFound>
+        <LayoutView Layout="@typeof(TrackerGanadero.Shared.Shared.MainLayout)">
+            <p role="alert">Pagina no encontrada.</p>
+        </LayoutView>
+    </NotFound>
+</Router>

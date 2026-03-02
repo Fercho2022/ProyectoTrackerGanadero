@@ -1,0 +1,1811 @@
+@page "/farms"
+@using TrackerGanadero.Shared.Models
+@using TrackerGanadero.Shared.Services
+@using TrackerGanadero.Shared.Components
+@using System.Linq
+@inject FarmService FarmService
+@inject TrackingService TrackingService
+@inject FarmTrackerService FarmTrackerService
+@inject IJSRuntime JSRuntime
+@inject HttpService HttpService
+
+<div class="container-fluid">
+    <!-- Page Header -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h2 class="mb-1">🏡 Gestión de Granjas</h2>
+                    <p class="text-muted">Configura las áreas de geofencing para tus granjas</p>
+                </div>
+                <div>
+                    <button class="btn btn-primary" @onclick="ShowCreateFarmModal">
+                        <i class="fas fa-plus me-2"></i>Nueva Granja
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Farms List -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="mb-0">📍 Granjas Existentes</h5>
+                </div>
+                <div class="card-body">
+                    @if (_farms?.Any() == true)
+                    {
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Nombre</th>
+                                        <th>Descripción</th>
+                                        <th>Coordenadas</th>
+                                        <th>Área de Geofencing</th>
+                                        <th>Acciones</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var farm in _farms)
+                                    {
+                                        <tr>
+                                            <td><strong>@farm.Name</strong></td>
+                                            <td>@farm.Description</td>
+                                            <td>
+                                                <small class="text-muted">
+                                                    📍 @farm.Latitude.ToString("F6"), @farm.Longitude.ToString("F6")
+                                                </small>
+                                            </td>
+                                            <td>
+                                                @if (farm.BoundaryCoordinates?.Any() == true)
+                                                {
+                                                    <span class="badge bg-success">@farm.BoundaryCoordinates.Count puntos</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="badge bg-warning">Sin configurar</span>
+                                                }
+                                            </td>
+                                            <td>
+                                                <div class="btn-group" role="group">
+                                                    <button class="btn btn-sm btn-outline-primary" @onclick="() => EditFarm(farm)">
+                                                        <i class="fas fa-edit"></i>
+                                                    </button>
+                                                    <button class="btn btn-sm btn-outline-info" @onclick="() => ViewFarmOnMap(farm)">
+                                                        <i class="fas fa-map-marked-alt"></i>
+                                                    </button>
+                                                    @if (farm.BoundaryCoordinates?.Any() == true)
+                                                    {
+                                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteGeofencing(farm)" title="Eliminar Área de Geofencing">
+                                                            <i class="fas fa-map-marked"></i>
+                                                        </button>
+                                                    }
+                                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteFarm(farm.Id)">
+                                                        <i class="fas fa-trash"></i>
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center text-muted py-4">
+                            <i class="fas fa-map-marked-alt fa-3x mb-3"></i>
+                            <p>No hay granjas registradas</p>
+                            <button class="btn btn-primary" @onclick="ShowCreateFarmModal">
+                                <i class="fas fa-plus me-2"></i>Crear Primera Granja
+                            </button>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Geofencing Configuration -->
+    @if (_selectedFarm != null)
+    {
+        <div class="row">
+            <div class="col-lg-8">
+                <!-- Map for Drawing -->
+                <div class="card mb-4">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">🗺️ Configurar Área de Geofencing</h5>
+                        <div>
+                            <button class="btn btn-sm @(_isDrawingMode ? "btn-danger" : "btn-success") me-2" @onclick="ToggleDrawingMode">
+                                <i class="fas @(_isDrawingMode ? "fa-times" : "fa-map-marker-alt") me-1"></i>@(_isDrawingMode ? "Finalizar" : "Marcar Puntos")
+                            </button>
+                            <button class="btn btn-sm btn-warning me-2" @onclick="ClearBoundaries" disabled="@_isDrawingMode">
+                                <i class="fas fa-eraser me-1"></i>Limpiar
+                            </button>
+                            <button class="btn btn-sm btn-primary" @onclick="SaveBoundaries" disabled="@_isDrawingMode">
+                                <i class="fas fa-save me-1"></i>Guardar
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body p-0">
+                        <div id="farmMap" style="height: 500px; width: 100%;"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-4">
+                <!-- Drawing Status -->
+                @if (_isDrawingMode)
+                {
+                    <div class="card mb-4 border-success">
+                        <div class="card-header bg-success text-white">
+                            <h5 class="mb-0">🎯 Modo Dibujo Activo</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="alert alert-success mb-3">
+                                <i class="fas fa-hand-pointer me-2"></i>
+                                <strong>Haz clic en el mapa</strong> para marcar cada punto del geofencing.
+                            </div>
+                            <div class="alert alert-info mb-0">
+                                <i class="fas fa-undo me-2"></i>
+                                <strong>Doble clic en un punto</strong> para eliminarlo y retroceder a ese punto.
+                            </div>
+                        </div>
+                    </div>
+                }
+
+                <!-- Current Point Coordinates -->
+                @if (!string.IsNullOrEmpty(_currentPointCoordinates))
+                {
+                    <div class="card mb-4 border-info">
+                        <div class="card-header bg-info text-white">
+                            <h5 class="mb-0">📍 Último Punto Marcado</h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="alert alert-info mb-0">
+                                <strong>@_currentPointCoordinates</strong>
+                            </div>
+                        </div>
+                    </div>
+                }
+
+                <!-- Manual Coordinate Entry -->
+                <div class="card mb-4">
+                    <div class="card-header">
+                        <h5 class="mb-0">📝 Entrada Manual de Coordenadas</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row mb-3">
+                            <div class="col-6">
+                                <label class="form-label">Latitud:</label>
+                                <input type="number" step="0.000001" @bind="_newCoordinate.Lat" class="form-control" placeholder="-34.123456" />
+                            </div>
+                            <div class="col-6">
+                                <label class="form-label">Longitud:</label>
+                                <input type="number" step="0.000001" @bind="_newCoordinate.Lng" class="form-control" placeholder="-58.123456" />
+                            </div>
+                        </div>
+                        <button class="btn btn-outline-primary w-100 mb-3" @onclick="AddCoordinate">
+                            <i class="fas fa-plus-circle me-2"></i>Agregar Coordenada
+                        </button>
+
+                        <!-- Coordinates List -->
+                        @if (_selectedFarm.BoundaryCoordinates?.Any() == true)
+                        {
+                            <div class="border rounded p-2" style="max-height: 300px; overflow-y: auto;">
+                                <small class="text-muted d-block mb-2">Puntos marcados (@_selectedFarm.BoundaryCoordinates.Count):</small>
+                                @for (int i = 0; i < _selectedFarm.BoundaryCoordinates.Count; i++)
+                                {
+                                    var coord = _selectedFarm.BoundaryCoordinates[i];
+                                    var index = i;
+                                    <div class="d-flex justify-content-between align-items-center mb-2 @(index == _selectedFarm.BoundaryCoordinates.Count - 1 ? "border-success border-2 rounded p-1" : "")"
+                                         style="@(index == _selectedFarm.BoundaryCoordinates.Count - 1 ? "background-color: #f8f9fa;" : "")">
+                                        <div>
+                                            <small class="@(index == _selectedFarm.BoundaryCoordinates.Count - 1 ? "text-success fw-bold" : "")">@(index + 1). </small>
+                                            <small class="@(index == _selectedFarm.BoundaryCoordinates.Count - 1 ? "text-success fw-bold" : "text-muted")">Lat: @coord.Lat.ToString("F6")</small><br/>
+                                            <small class="@(index == _selectedFarm.BoundaryCoordinates.Count - 1 ? "text-success fw-bold" : "text-muted")" style="margin-left: 20px;">Lng: @coord.Lng.ToString("F6")</small>
+                                        </div>
+                                        <button class="btn btn-sm btn-outline-danger" @onclick="() => RemoveCoordinate(index)" disabled="@_isDrawingMode">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                }
+                                @if (_selectedFarm.BoundaryCoordinates.Count >= 3)
+                                {
+                                    <div class="mt-2 p-2 bg-light rounded">
+                                        <small class="text-success">
+                                            <i class="fas fa-check-circle me-1"></i>
+                                            Área válida con @_selectedFarm.BoundaryCoordinates.Count puntos
+                                        </small>
+                                    </div>
+                                }
+                                else
+                                {
+                                    <div class="mt-2 p-2 bg-warning bg-opacity-10 rounded">
+                                        <small class="text-warning">
+                                            <i class="fas fa-exclamation-triangle me-1"></i>
+                                            Necesitas al menos 3 puntos para crear un área
+                                        </small>
+                                    </div>
+                                }
+                            </div>
+                        }
+                    </div>
+                </div>
+
+                <!-- File Import -->
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">📂 Importar desde Archivo</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <label class="form-label">Seleccionar archivo:</label>
+                            <InputFile OnChange="ImportCoordinatesFromFile" accept=".csv,.json,.kml" class="form-control" />
+                            <small class="text-muted">Formatos soportados: CSV, JSON, KML</small>
+                        </div>
+
+                        <div class="alert alert-info small">
+                            <strong>Formato CSV:</strong><br/>
+                            latitude,longitude<br/>
+                            -34.123456,-58.123456<br/>
+                            -34.124456,-58.124456
+                        </div>
+
+                        <div class="alert alert-info small">
+                            <strong>Formato JSON:</strong><br/>
+                            [{"latitude": -34.123456, "longitude": -58.123456}]
+                        </div>
+
+                        @if (!string.IsNullOrEmpty(_importMessage))
+                        {
+                            <div class="alert alert-@(_importSuccess ? "success" : "danger") small">
+                                @_importMessage
+                            </div>
+                        }
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+
+</div>
+
+<!-- Create/Edit Farm Modal -->
+<div class="modal fade @(_showFarmModal ? "show d-block" : "")" tabindex="-1" style="@(_showFarmModal ? "background-color: rgba(0,0,0,0.5);" : "")">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">@(_editingFarm?.Id > 0 ? "Editar" : "Crear") Granja</h5>
+                <button type="button" class="btn-close" @onclick="CloseFarmModal"></button>
+            </div>
+            <div class="modal-body">
+                @if (_editingFarm != null)
+                {
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Nombre:</label>
+                            <input type="text" @bind="_editingFarm.Name" class="form-control" placeholder="Nombre de la granja" />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Descripción:</label>
+                            <input type="text" @bind="_editingFarm.Description" class="form-control" placeholder="Descripción opcional" />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Latitud Central:</label>
+                            <input type="number" step="0.000001" @bind="_editingFarm.Latitude" class="form-control" placeholder="-34.123456" />
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label">Longitud Central:</label>
+                            <input type="number" step="0.000001" @bind="_editingFarm.Longitude" class="form-control" placeholder="-58.123456" />
+                        </div>
+                    </div>
+
+                    <div class="alert alert-info">
+                        <i class="fas fa-info-circle me-2"></i>
+                        Después de crear la granja, podrás configurar el área de geofencing usando las herramientas de dibujo, entrada manual o importación de archivos.
+                    </div>
+                }
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" @onclick="CloseFarmModal">Cancelar</button>
+                <button type="button" class="btn btn-primary" @onclick="SaveFarm">
+                    <i class="fas fa-save me-2"></i>Guardar
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Loading Overlay -->
+@if (_isLoading)
+{
+    <div class="position-fixed top-0 start-0 w-100 h-100 d-flex align-items-center justify-content-center"
+         style="background-color: rgba(0,0,0,0.5); z-index: 9999;">
+        <div class="card">
+            <div class="card-body text-center">
+                <div class="spinner-border text-primary mb-3" role="status"></div>
+                <p class="mb-0">@_loadingMessage</p>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<FarmDto>? _farms = new();
+    private FarmDto? _selectedFarm;
+    private FarmDto? _editingFarm;
+    private LatLngDto _newCoordinate = new();
+    private bool _showFarmModal = false;
+    private bool _isLoading = true;
+    private string _loadingMessage = "Cargando granjas...";
+    private string _importMessage = "";
+    private bool _importSuccess = false;
+    private bool _isDrawingMode = false;
+    private string _currentPointCoordinates = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadFarms();
+        _isLoading = false;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            await InitializeMap();
+        }
+        else if (_selectedFarm != null)
+        {
+            try
+            {
+                // Check if map container exists but no map is initialized
+                var mapExists = await JSRuntime.InvokeAsync<bool>("checkMapExists");
+                if (!mapExists)
+                {
+                    Console.WriteLine("Map container found but map not initialized, reinitializing...");
+                    // Clean up any remnants
+                    await JSRuntime.InvokeVoidAsync("cleanupFarmMap");
+                    await Task.Delay(200); // Small delay to ensure cleanup and DOM is ready
+                    await InitializeMap();
+                    if (_selectedFarm != null)
+                    {
+                        // Load animals and update map with both farm and animals
+                        try
+                        {
+                            var farmAnimals = await TrackingService.GetFarmAnimalsLocationsAsync(_selectedFarm.Id);
+                            Console.WriteLine($"Reinitializing with {farmAnimals.Count} animals for farm {_selectedFarm.Name}");
+                            await UpdateMapWithFarmAndAnimals(_selectedFarm, farmAnimals);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error loading animals during reinit for farm {_selectedFarm.Id}: {ex.Message}");
+                            await UpdateMapWithFarm(_selectedFarm);
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error checking map existence: {ex.Message}");
+                // Fallback: always try to initialize the map
+                try
+                {
+                    await JSRuntime.InvokeVoidAsync("cleanupFarmMap");
+                    await Task.Delay(200);
+                    await InitializeMap();
+                    if (_selectedFarm != null)
+                    {
+                        // Load animals and update map with both farm and animals
+                        try
+                        {
+                            var farmAnimals = await TrackingService.GetFarmAnimalsLocationsAsync(_selectedFarm.Id);
+                            Console.WriteLine($"Fallback reinitializing with {farmAnimals.Count} animals for farm {_selectedFarm.Name}");
+                            await UpdateMapWithFarmAndAnimals(_selectedFarm, farmAnimals);
+                        }
+                        catch (Exception animalEx)
+                        {
+                            Console.WriteLine($"Error loading animals during fallback reinit for farm {_selectedFarm.Id}: {animalEx.Message}");
+                            await UpdateMapWithFarm(_selectedFarm);
+                        }
+                    }
+                }
+                catch (Exception initEx)
+                {
+                    Console.WriteLine($"Error initializing map: {initEx.Message}");
+                }
+            }
+        }
+    }
+
+    private async Task LoadFarms()
+    {
+        try
+        {
+            Console.WriteLine($"🔧 LoadFarms: Calling FarmService.GetFarmsAsync()...");
+            _farms = await FarmService.GetFarmsAsync();
+
+            Console.WriteLine($"🔧 LoadFarms: Received {_farms?.Count ?? 0} farms from API");
+            if (_farms != null)
+            {
+                foreach (var farm in _farms)
+                {
+                    Console.WriteLine($"🔧   - {farm.Name} (ID: {farm.Id}): {farm.BoundaryCoordinates?.Count ?? 0} coordinates");
+                    if (farm.BoundaryCoordinates?.Any() == true)
+                    {
+                        Console.WriteLine($"🔧     First coordinate: Lat={farm.BoundaryCoordinates.First().Lat}, Lng={farm.BoundaryCoordinates.First().Lng}");
+                    }
+                }
+            }
+            else
+            {
+                Console.WriteLine($"🚨 LoadFarms: _farms is null!");
+            }
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading farms: {ex.Message}");
+        }
+    }
+
+    private async Task InitializeMap()
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("initializeFarmMap");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error initializing map: {ex.Message}");
+        }
+    }
+
+    private void ShowCreateFarmModal()
+    {
+        _editingFarm = new FarmDto
+        {
+            BoundaryCoordinates = new List<LatLngDto>()
+        };
+        _showFarmModal = true;
+    }
+
+    private void EditFarm(FarmDto farm)
+    {
+        _selectedFarm = new FarmDto
+        {
+            Id = farm.Id,
+            Name = farm.Name,
+            Description = farm.Description,
+            Latitude = farm.Latitude,
+            Longitude = farm.Longitude,
+            BoundaryCoordinates = farm.BoundaryCoordinates?.ToList() ?? new List<LatLngDto>(),
+            UserId = farm.UserId,
+            CreatedAt = farm.CreatedAt,
+            UpdatedAt = farm.UpdatedAt
+        };
+
+        _editingFarm = _selectedFarm;
+        _showFarmModal = true;
+
+        // Update map with farm boundaries
+        InvokeAsync(async () => await UpdateMapWithFarm(_selectedFarm));
+    }
+
+    private async Task DeleteGeofencing(FarmDto farm)
+    {
+        if (await JSRuntime.InvokeAsync<bool>("confirm", $"¿Estás seguro de que quieres eliminar el área de geofencing de {farm.Name}?"))
+        {
+            try
+            {
+                _isLoading = true;
+                _loadingMessage = "Eliminando área de geofencing...";
+                StateHasChanged();
+
+                // Clear the farm's boundary coordinates in the API
+                await FarmService.UpdateFarmBoundariesAsync(farm.Id, new List<LatLngDto>());
+
+                // Reload farms to update the UI
+                await LoadFarms();
+
+                // Select this farm and show it on the map with animals
+                _selectedFarm = _farms?.FirstOrDefault(f => f.Id == farm.Id);
+                if (_selectedFarm != null)
+                {
+                    // Load the animals for this farm and show them on the map
+                    var farmAnimals = await TrackingService.GetFarmAnimalsLocationsAsync(farm.Id);
+                    Console.WriteLine($"Loaded {farmAnimals.Count} animals for farm {farm.Name} after deleting geofencing");
+
+                    // Update map to show farm center and animals (no boundaries)
+                    await UpdateMapWithFarmAndAnimals(_selectedFarm, farmAnimals);
+                }
+
+                _isLoading = false;
+                StateHasChanged();
+            }
+            catch (Exception ex)
+            {
+                _isLoading = false;
+                Console.WriteLine($"Error deleting geofencing: {ex.Message}");
+                await JSRuntime.InvokeVoidAsync("alert", $"Error eliminando área de geofencing: {ex.Message}");
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task ViewFarmOnMap(FarmDto farm)
+    {
+        _selectedFarm = farm;
+
+        // Load the animals for this farm to show their trackers on the map
+        try
+        {
+            var farmAnimals = await TrackingService.GetFarmAnimalsLocationsAsync(farm.Id);
+            Console.WriteLine($"Loaded {farmAnimals.Count} animals for farm {farm.Name} (ID: {farm.Id})");
+
+            // Update map with farm boundaries and animal trackers
+            await UpdateMapWithFarmAndAnimals(farm, farmAnimals);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading animals for farm {farm.Id}: {ex.Message}");
+            // Fallback to showing just the farm boundary
+            await UpdateMapWithFarm(farm);
+        }
+    }
+
+    private async Task UpdateMapWithFarm(FarmDto farm)
+    {
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("updateFarmMap", farm.Latitude, farm.Longitude, farm.BoundaryCoordinates?.ToArray() ?? Array.Empty<LatLngDto>());
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error updating map: {ex.Message}");
+        }
+    }
+
+    private async Task UpdateMapWithFarmAndAnimals(FarmDto farm, List<AnimalLocationDto> animals)
+    {
+        try
+        {
+            // Prepare animal data for JavaScript
+            var animalData = animals.Where(a => a.Location != null).Select(a => new
+            {
+                id = a.AnimalId,
+                name = a.AnimalName,
+                tag = a.Tag,
+                status = a.Status,
+                latitude = a.Location!.Latitude,
+                longitude = a.Location!.Longitude,
+                timestamp = a.Location!.Timestamp,
+                speed = a.Location!.Speed,
+                temperature = a.Location!.Temperature == 0 ? 20.0 : a.Location!.Temperature,
+                activityLevel = a.Location!.ActivityLevel == 0 ? 50 : a.Location!.ActivityLevel
+            }).ToArray();
+
+            Console.WriteLine($"Sending {animalData.Length} animals to map for farm {farm.Name}");
+
+            await JSRuntime.InvokeVoidAsync("updateFarmMapWithAnimals",
+                farm.Latitude,
+                farm.Longitude,
+                farm.BoundaryCoordinates?.ToArray() ?? Array.Empty<LatLngDto>(),
+                animalData);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error updating map with animals: {ex.Message}");
+            // Fallback to showing just the farm boundary
+            await UpdateMapWithFarm(farm);
+        }
+    }
+
+    private async Task ToggleDrawingMode()
+    {
+        try
+        {
+            _isDrawingMode = !_isDrawingMode;
+            _currentPointCoordinates = "";
+
+            if (_isDrawingMode)
+            {
+                await JSRuntime.InvokeVoidAsync("enablePointClickMode");
+            }
+            else
+            {
+                await JSRuntime.InvokeVoidAsync("disablePointClickMode");
+            }
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error toggling drawing mode: {ex.Message}");
+        }
+    }
+
+    private async Task ClearBoundaries()
+    {
+        if (_selectedFarm != null)
+        {
+            _selectedFarm.BoundaryCoordinates?.Clear();
+            await JSRuntime.InvokeVoidAsync("clearPolygon");
+            StateHasChanged();
+        }
+    }
+
+    private void AddCoordinate()
+    {
+        if (_selectedFarm != null && _newCoordinate.Lat != 0 && _newCoordinate.Lng != 0)
+        {
+            _selectedFarm.BoundaryCoordinates ??= new List<LatLngDto>();
+            _selectedFarm.BoundaryCoordinates.Add(new LatLngDto
+            {
+                Lat = _newCoordinate.Lat,
+                Lng = _newCoordinate.Lng
+            });
+
+            _newCoordinate = new LatLngDto();
+
+            // Update map
+            InvokeAsync(async () => await UpdateMapWithFarm(_selectedFarm));
+            StateHasChanged();
+        }
+    }
+
+    private void RemoveCoordinate(int index)
+    {
+        if (_selectedFarm?.BoundaryCoordinates != null && index >= 0 && index < _selectedFarm.BoundaryCoordinates.Count)
+        {
+            _selectedFarm.BoundaryCoordinates.RemoveAt(index);
+
+            // Update map
+            InvokeAsync(async () => await UpdateMapWithFarm(_selectedFarm));
+            StateHasChanged();
+        }
+    }
+
+    private async Task ImportCoordinatesFromFile(InputFileChangeEventArgs e)
+    {
+        try
+        {
+            _importMessage = "";
+            var file = e.File;
+
+            if (file.Size > 1024 * 1024) // 1MB limit
+            {
+                _importMessage = "El archivo es demasiado grande. Máximo 1MB.";
+                _importSuccess = false;
+                return;
+            }
+
+            using var reader = new StreamReader(file.OpenReadStream());
+            var content = await reader.ReadToEndAsync();
+
+            var coordinates = new List<LatLngDto>();
+
+            if (file.Name.EndsWith(".csv", StringComparison.OrdinalIgnoreCase))
+            {
+                coordinates = ParseCsvCoordinates(content);
+            }
+            else if (file.Name.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+            {
+                coordinates = ParseJsonCoordinates(content);
+            }
+            else if (file.Name.EndsWith(".kml", StringComparison.OrdinalIgnoreCase))
+            {
+                coordinates = ParseKmlCoordinates(content);
+            }
+            else
+            {
+                _importMessage = "Formato de archivo no soportado.";
+                _importSuccess = false;
+                return;
+            }
+
+            if (coordinates.Any())
+            {
+                if (_selectedFarm != null)
+                {
+                    _selectedFarm.BoundaryCoordinates = coordinates;
+                    await UpdateMapWithFarm(_selectedFarm);
+                    _importMessage = $"Se importaron {coordinates.Count} coordenadas exitosamente.";
+                    _importSuccess = true;
+                }
+                else
+                {
+                    _importMessage = "Selecciona una granja primero.";
+                    _importSuccess = false;
+                }
+            }
+            else
+            {
+                _importMessage = "No se encontraron coordenadas válidas en el archivo.";
+                _importSuccess = false;
+            }
+
+            StateHasChanged();
+        }
+        catch (Exception ex)
+        {
+            _importMessage = $"Error al importar archivo: {ex.Message}";
+            _importSuccess = false;
+            StateHasChanged();
+        }
+    }
+
+    private List<LatLngDto> ParseCsvCoordinates(string content)
+    {
+        var coordinates = new List<LatLngDto>();
+        var lines = content.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var line in lines.Skip(1)) // Skip header
+        {
+            var parts = line.Split(',');
+            if (parts.Length >= 2 &&
+                double.TryParse(parts[0].Trim(), out var lat) &&
+                double.TryParse(parts[1].Trim(), out var lng))
+            {
+                coordinates.Add(new LatLngDto { Lat = lat, Lng = lng });
+            }
+        }
+
+        return coordinates;
+    }
+
+    private List<LatLngDto> ParseJsonCoordinates(string content)
+    {
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<List<LatLngDto>>(content) ?? new List<LatLngDto>();
+        }
+        catch
+        {
+            return new List<LatLngDto>();
+        }
+    }
+
+    private List<LatLngDto> ParseKmlCoordinates(string content)
+    {
+        var coordinates = new List<LatLngDto>();
+        // Simple KML parsing - in production, use a proper KML parser
+        var coordinatesMatch = System.Text.RegularExpressions.Regex.Match(content, @"<coordinates>(.*?)</coordinates>", System.Text.RegularExpressions.RegexOptions.Singleline);
+        if (coordinatesMatch.Success)
+        {
+            var coordsText = coordinatesMatch.Groups[1].Value.Trim();
+            var coordPairs = coordsText.Split(new[] { ' ', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (var coordPair in coordPairs)
+            {
+                var parts = coordPair.Split(',');
+                if (parts.Length >= 2 &&
+                    double.TryParse(parts[1], out var lat) &&
+                    double.TryParse(parts[0], out var lng))
+                {
+                    coordinates.Add(new LatLngDto { Lat = lat, Lng = lng });
+                }
+            }
+        }
+        return coordinates;
+    }
+
+    private async Task SaveBoundaries()
+    {
+        if (_selectedFarm != null)
+        {
+            // Get coordinates directly from JavaScript
+            try
+            {
+                var jsCoordinates = await JSRuntime.InvokeAsync<LatLngDto[]>("getMapCoordinates");
+                if (jsCoordinates != null && jsCoordinates.Length > 0)
+                {
+                    _selectedFarm.BoundaryCoordinates = jsCoordinates.ToList();
+                }
+            }
+            catch (Exception jsEx)
+            {
+                Console.WriteLine($"Error obtaining coordinates from JS: {jsEx.Message}");
+                return;
+            }
+
+            try
+            {
+                _isLoading = true;
+                _loadingMessage = "Guardando área de geofencing...";
+                StateHasChanged();
+
+                await FarmService.UpdateFarmBoundariesAsync(_selectedFarm.Id, _selectedFarm.BoundaryCoordinates ?? new List<LatLngDto>());
+
+                Console.WriteLine($"🔧 API call completed, waiting 500ms before reloading farms...");
+                await Task.Delay(500); // Small delay to ensure database is updated
+                await LoadFarms();
+
+                Console.WriteLine($"🔧 Farms reloaded, _farms count: {_farms?.Count ?? 0}");
+
+                // Update the selected farm with the latest data from the reloaded farms list
+                var updatedFarm = _farms?.FirstOrDefault(f => f.Id == _selectedFarm.Id);
+                if (updatedFarm != null)
+                {
+                    Console.WriteLine($"🔧 Found updated farm: {updatedFarm.Name} with {updatedFarm.BoundaryCoordinates?.Count ?? 0} coordinates");
+                    _selectedFarm = updatedFarm;
+                    Console.WriteLine($"🔧 Updated selected farm {_selectedFarm.Name} with {_selectedFarm.BoundaryCoordinates?.Count ?? 0} coordinates");
+
+                    // Force UI update
+                    StateHasChanged();
+                    Console.WriteLine($"🔧 Called StateHasChanged() to force UI update");
+                }
+                else
+                {
+                    Console.WriteLine($"🚨 ERROR: Could not find updated farm with ID {_selectedFarm.Id} in reloaded farms list");
+                    if (_farms != null)
+                    {
+                        Console.WriteLine($"🚨 Available farm IDs: {string.Join(", ", _farms.Select(f => f.Id))}");
+                    }
+                }
+
+                _importMessage = $"Área de geofencing guardada exitosamente para {_selectedFarm.Name}. Coordenadas: {_selectedFarm.BoundaryCoordinates?.Count ?? 0}";
+                _importSuccess = true;
+            }
+            catch (Exception ex)
+            {
+                _importMessage = $"Error al guardar: {ex.Message}";
+                _importSuccess = false;
+            }
+            finally
+            {
+                _isLoading = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private void CloseFarmModal()
+    {
+        _showFarmModal = false;
+        _editingFarm = null;
+    }
+
+    private async Task SaveFarm()
+    {
+        if (_editingFarm != null)
+        {
+            try
+            {
+                _isLoading = true;
+                _loadingMessage = _editingFarm.Id > 0 ? "Actualizando granja..." : "Creando granja...";
+                StateHasChanged();
+
+                Console.WriteLine($"Saving farm: {_editingFarm.Name}");
+                Console.WriteLine($"Description: {_editingFarm.Description}");
+                Console.WriteLine($"Latitude: {_editingFarm.Latitude}");
+                Console.WriteLine($"Longitude: {_editingFarm.Longitude}");
+
+                if (_editingFarm.Id > 0)
+                {
+                    Console.WriteLine("Updating existing farm...");
+                    await FarmService.UpdateFarmAsync(_editingFarm);
+
+                    // Limpiar trackers inactivos después de editar la granja
+                    try
+                    {
+                        Console.WriteLine("Cleaning up inactive trackers from farm...");
+                        var cleanupResult = await FarmTrackerService.CleanupInactiveTrackersAsync(_editingFarm.Id);
+                        if (cleanupResult.success && cleanupResult.cleanedCount > 0)
+                        {
+                            Console.WriteLine($"Cleaned up {cleanupResult.cleanedCount} inactive trackers from farm");
+                        }
+                    }
+                    catch (Exception cleanupEx)
+                    {
+                        Console.WriteLine($"Warning: Could not clean up inactive trackers: {cleanupEx.Message}");
+                        // No interrumpir el flujo principal si falla la limpieza
+                    }
+                }
+                else
+                {
+                    Console.WriteLine("Creating new farm...");
+                    var createdFarm = await FarmService.CreateFarmAsync(_editingFarm);
+                    Console.WriteLine($"Farm created with ID: {createdFarm?.Id}");
+                    if (createdFarm != null)
+                        _editingFarm.Id = createdFarm.Id;
+                }
+
+                await LoadFarms();
+                CloseFarmModal();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error saving farm: {ex.Message}");
+            }
+            finally
+            {
+                _isLoading = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    private async Task DeleteFarm(int farmId)
+    {
+        if (await JSRuntime.InvokeAsync<bool>("confirm", "¿Estás seguro de que quieres eliminar esta granja?"))
+        {
+            try
+            {
+                _isLoading = true;
+                _loadingMessage = "Eliminando granja...";
+                StateHasChanged();
+
+                await FarmService.DeleteFarmAsync(farmId);
+
+                await LoadFarms();
+                if (_selectedFarm?.Id == farmId)
+                {
+                    _selectedFarm = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error deleting farm: {ex.Message}");
+            }
+            finally
+            {
+                _isLoading = false;
+                StateHasChanged();
+            }
+        }
+    }
+
+    [JSInvokable("OnPolygonDrawn")]
+    public async Task OnPolygonDrawn(LatLngDto[] coordinates)
+    {
+        if (_selectedFarm != null)
+        {
+            if (coordinates?.Length > 0)
+            {
+                _selectedFarm.BoundaryCoordinates = coordinates.ToList();
+                Console.WriteLine($"🔧 Coordinates assigned to farm {_selectedFarm.Name}");
+
+                // Update current point coordinates display for the last point
+                if (coordinates.Length > 0 && _isDrawingMode)
+                {
+                    var lastPoint = coordinates.Last();
+                    _currentPointCoordinates = $"Lat: {lastPoint.Lat:F6}, Lng: {lastPoint.Lng:F6}";
+                    Console.WriteLine($"🔧 Updated current point display: {_currentPointCoordinates}");
+                }
+            }
+            else
+            {
+                // Clear coordinates
+                _selectedFarm.BoundaryCoordinates = new List<LatLngDto>();
+                _currentPointCoordinates = "";
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+}
+
+<!-- Leaflet CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin="" />
+
+<!-- Leaflet Draw CSS -->
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css"
+      integrity="sha256-z4m4aXnBnJd0PoK7yvJIE1YKNJzMUBX0rUKrm8SuJ/I="
+      crossorigin="" />
+
+<!-- Leaflet JavaScript -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+
+<!-- Leaflet Draw JavaScript -->
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"
+        integrity="sha256-m/7Wp30t3hW2KHbFRkn9uFeY7sDnNc7lIJ9tUfqc2rE="
+        crossorigin=""></script>
+
+<script>
+    let farmMap;
+    let drawControl;
+    let currentPolygon;
+    let drawnItems;
+
+    window.initializeFarmMap = function() {
+        // Wait for Leaflet to be fully loaded
+        function waitForLeaflet() {
+            if (typeof L === 'undefined') {
+                setTimeout(waitForLeaflet, 200);
+                return;
+            }
+
+            const mapElement = document.getElementById("farmMap");
+            if (!mapElement) {
+                console.error("Farm map element not found");
+                setTimeout(waitForLeaflet, 100);
+                return;
+            }
+
+            try {
+                // Check if map is already initialized
+                if (farmMap) {
+                    console.log("Farm map already initialized");
+                    return;
+                }
+
+                // Default center (Entre Ríos, Argentina)
+                const defaultCenter = [-33.0167, -58.5167];
+
+                // Initialize Leaflet map
+                farmMap = L.map('farmMap', {
+                    center: defaultCenter,
+                    zoom: 10,
+                    zoomControl: true
+                });
+
+                // Add OpenStreetMap tile layer
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                    maxZoom: 19
+                }).addTo(farmMap);
+
+                // Initialize FeatureGroup to store drawn items
+                drawnItems = new L.FeatureGroup();
+                farmMap.addLayer(drawnItems);
+
+                // Initialize draw control
+                drawControl = new L.Control.Draw({
+                    position: 'topright',
+                    draw: {
+                        polygon: {
+                            allowIntersection: false,
+                            showArea: true,
+                            drawError: {
+                                color: '#e1e100',
+                                message: '<strong>¡Error!</strong> El polígono no puede intersectarse!'
+                            },
+                            shapeOptions: {
+                                color: '#28a745',
+                                fillColor: '#28a745',
+                                fillOpacity: 0.3,
+                                weight: 2
+                            }
+                        },
+                        circle: false,
+                        rectangle: false,
+                        polyline: false,
+                        marker: false,
+                        circlemarker: false
+                    },
+                    edit: {
+                        featureGroup: drawnItems,
+                        remove: true
+                    }
+                });
+
+                farmMap.addControl(drawControl);
+
+                // Listen for polygon creation
+                farmMap.on(L.Draw.Event.CREATED, function(event) {
+                    var layer = event.layer;
+
+                    // Clear existing polygons
+                    drawnItems.clearLayers();
+                    drawnItems.addLayer(layer);
+                    currentPolygon = layer;
+
+                    // Get coordinates and send to C#
+                    const coordinates = layer.getLatLngs()[0].map(coord => ({
+                        latitude: coord.lat,
+                        longitude: coord.lng
+                    }));
+
+                    console.log('🔥 Calling OnPolygonDrawn with coordinates:', coordinates);
+                    DotNet.invokeMethodAsync('TrackerGanaderoBlazorHibridMaui', 'OnPolygonDrawn', coordinates)
+                        .catch(function(error) {
+                            console.error('❌ Error calling OnPolygonDrawn:', error);
+                        });
+                });
+
+                // Listen for polygon edits
+                farmMap.on(L.Draw.Event.EDITED, function(event) {
+                    var layers = event.layers;
+                    layers.eachLayer(function(layer) {
+                        const coordinates = layer.getLatLngs()[0].map(coord => ({
+                            latitude: coord.lat,
+                            longitude: coord.lng
+                        }));
+                        console.log('🔥 Calling OnPolygonDrawn with coordinates:', coordinates);
+                    DotNet.invokeMethodAsync('TrackerGanaderoBlazorHibridMaui', 'OnPolygonDrawn', coordinates)
+                        .catch(function(error) {
+                            console.error('❌ Error calling OnPolygonDrawn:', error);
+                        });
+                    });
+                });
+
+                // Listen for polygon deletion
+                farmMap.on(L.Draw.Event.DELETED, function(event) {
+                    currentPolygon = null;
+                    console.log('🔥 Calling OnPolygonDrawn with empty array for deletion');
+                    DotNet.invokeMethodAsync('TrackerGanaderoBlazorHibridMaui', 'OnPolygonDrawn', [])
+                        .catch(function(error) {
+                            console.error('❌ Error calling OnPolygonDrawn:', error);
+                        });
+                });
+
+                console.log("Farm map initialized successfully with Leaflet");
+            } catch (error) {
+                console.error("Error initializing map:", error);
+                setTimeout(waitForLeaflet, 500);
+            }
+        }
+
+        waitForLeaflet();
+    };
+
+    window.updateFarmMap = function(centerLat, centerLng, boundaries) {
+        if (!farmMap) return;
+
+        // Center map on farm
+        farmMap.setView([centerLat, centerLng], 15);
+
+        // Clear existing polygon and central marker
+        if (drawnItems) {
+            drawnItems.clearLayers();
+        }
+        currentPolygon = null;
+
+        // ✅ ADD: Create central point marker
+        if (centerLat && centerLng) {
+            const centralPointIcon = L.divIcon({
+                className: 'central-point-marker',
+                html: `<div class="central-point-icon">
+                          <div class="central-point-inner">📍</div>
+                          <div class="central-point-label">Centro</div>
+                       </div>`,
+                iconSize: [60, 70],
+                iconAnchor: [30, 35]
+            });
+
+            const centralMarker = L.marker([centerLat, centerLng], {
+                icon: centralPointIcon,
+                zIndexOffset: 1000 // Ensure it appears above other elements
+            });
+
+            centralMarker.addTo(farmMap);
+
+            // Add tooltip
+            centralMarker.bindTooltip(`Punto Central de la Granja<br>Lat: ${centerLat.toFixed(6)}<br>Lng: ${centerLng.toFixed(6)}`, {
+                permanent: false,
+                direction: 'top',
+                offset: [0, -10]
+            });
+        }
+
+        // Draw boundaries if they exist
+        if (boundaries && boundaries.length > 0) {
+            const polygonCoords = boundaries.map(coord => [coord.latitude, coord.longitude]);
+
+            currentPolygon = L.polygon(polygonCoords, {
+                color: '#ff0000',
+                fillColor: '#ff0000',
+                fillOpacity: 0.35,
+                weight: 2
+            });
+
+            // Add to drawnItems and map
+            drawnItems.addLayer(currentPolygon);
+
+            // Fit bounds to show all coordinates
+            const group = new L.featureGroup([currentPolygon]);
+            farmMap.fitBounds(group.getBounds(), { padding: [20, 20] });
+
+            // Listen for polygon edits through events
+            currentPolygon.on('edit', function() {
+                updatePolygonCoordinates();
+            });
+        }
+    };
+
+    let isPointClickMode = false;
+    let clickedPoints = [];
+    let pointMarkers = [];
+    let currentPolygonPreview = null;
+
+    window.enablePointClickMode = function() {
+        isPointClickMode = true;
+        farmMap.getContainer().style.cursor = 'crosshair';
+
+        // Add click listener
+        farmMap.on('click', onMapClick);
+
+        console.log("Point click mode enabled - click on map to add points");
+    };
+
+    window.disablePointClickMode = function() {
+        isPointClickMode = false;
+        farmMap.getContainer().style.cursor = '';
+
+        // Remove click listener
+        farmMap.off('click', onMapClick);
+
+        // Create final polygon if we have enough points
+        if (clickedPoints.length >= 3) {
+            createFinalPolygon();
+        }
+
+        console.log("Point click mode disabled");
+    };
+
+    function onMapClick(e) {
+        if (!isPointClickMode) return;
+
+        const lat = e.latlng.lat;
+        const lng = e.latlng.lng;
+
+        // Add point to array
+        clickedPoints.push([lat, lng]);
+
+        // Create marker for the point with the current index
+        const pointIndex = clickedPoints.length - 1;
+        const marker = L.circleMarker([lat, lng], {
+            color: '#ff6b6b',
+            fillColor: '#ff6b6b',
+            fillOpacity: 0.8,
+            radius: 6,
+            weight: 2,
+            pointIndex: pointIndex // Store index for reference
+        }).addTo(farmMap);
+
+        // Add point number and coordinates label
+        const coordText = `Punto ${clickedPoints.length}<br/>Lat: ${lat.toFixed(6)}<br/>Lng: ${lng.toFixed(6)}`;
+        marker.bindTooltip(coordText, {
+            permanent: true,
+            direction: 'top',
+            offset: [0, -15],
+            className: 'point-label-with-coords'
+        });
+
+        // Add double-click handler to remove this point and all subsequent points
+        marker.on('dblclick', function(e) {
+            L.DomEvent.stopPropagation(e); // Prevent map click event
+            removePointAndSubsequent(pointIndex);
+        });
+
+        // Visual feedback on hover
+        marker.on('mouseover', function() {
+            this.setStyle({
+                radius: 8,
+                color: '#ff0000',
+                fillColor: '#ff0000'
+            });
+        });
+
+        marker.on('mouseout', function() {
+            this.setStyle({
+                radius: 6,
+                color: '#ff6b6b',
+                fillColor: '#ff6b6b'
+            });
+        });
+
+        pointMarkers.push(marker);
+
+        // Update preview polygon if we have 3+ points
+        updatePolygonPreview();
+
+        // Send current coordinates to C# for UI updates
+        // IMPORTANTE: Usar "Lat" y "Lng" (no "latitude" y "longitude") para coincidir con LatLngDto en C#
+        const currentCoords = clickedPoints.map(coord => ({
+            Lat: coord[0],
+            Lng: coord[1]
+        }));
+        console.log('🔥 Calling OnPolygonDrawn from addPointToPolygon:', currentCoords);
+        DotNet.invokeMethodAsync('TrackerGanaderoBlazorHibridMaui', 'OnPolygonDrawn', currentCoords)
+            .catch(function(error) {
+                console.error('❌ Error calling OnPolygonDrawn:', error);
+            });
+    }
+
+    // Function to remove a point and all subsequent points (undo to that point)
+    function removePointAndSubsequent(pointIndex) {
+        if (!isPointClickMode || pointIndex < 0 || pointIndex >= clickedPoints.length) return;
+
+        console.log(`Eliminando punto ${pointIndex + 1} y todos los posteriores`);
+
+        // Remove all markers from pointIndex onwards
+        for (let i = pointIndex; i < pointMarkers.length; i++) {
+            farmMap.removeLayer(pointMarkers[i]);
+        }
+
+        // Truncate arrays to keep only points before pointIndex
+        clickedPoints = clickedPoints.slice(0, pointIndex);
+        pointMarkers = pointMarkers.slice(0, pointIndex);
+
+        // Update polygon preview
+        updatePolygonPreview();
+
+        // Send updated coordinates to C#
+        // IMPORTANTE: Usar "Lat" y "Lng" (no "latitude" y "longitude") para coincidir con LatLngDto en C#
+        const currentCoords = clickedPoints.map(coord => ({
+            Lat: coord[0],
+            Lng: coord[1]
+        }));
+        console.log('🔥 Calling OnPolygonDrawn after removing point:', currentCoords);
+        DotNet.invokeMethodAsync('TrackerGanaderoBlazorHibridMaui', 'OnPolygonDrawn', currentCoords)
+            .catch(function(error) {
+                console.error('❌ Error calling OnPolygonDrawn:', error);
+            });
+
+        // Show feedback message
+        if (clickedPoints.length > 0) {
+            console.log(`✅ Volviendo al punto ${clickedPoints.length}. Puedes continuar marcando puntos.`);
+        } else {
+            console.log(`✅ Todos los puntos eliminados. Puedes empezar de nuevo.`);
+        }
+    }
+
+    function updatePolygonPreview() {
+        // Remove existing preview
+        if (currentPolygonPreview) {
+            farmMap.removeLayer(currentPolygonPreview);
+        }
+
+        // Create new preview if we have enough points
+        if (clickedPoints.length >= 3) {
+            currentPolygonPreview = L.polygon(clickedPoints, {
+                color: '#28a745',
+                fillColor: '#28a745',
+                fillOpacity: 0.2,
+                weight: 2,
+                dashArray: '5, 5'
+            }).addTo(farmMap);
+        }
+    }
+
+    function createFinalPolygon() {
+        // Remove preview and markers
+        clearPointClickElements();
+
+        if (clickedPoints.length >= 3) {
+            // Create final solid polygon
+            const finalPolygon = L.polygon(clickedPoints, {
+                color: '#28a745',
+                fillColor: '#28a745',
+                fillOpacity: 0.3,
+                weight: 2
+            });
+
+            // Clear existing drawn items and add the new polygon
+            drawnItems.clearLayers();
+            drawnItems.addLayer(finalPolygon);
+            currentPolygon = finalPolygon;
+        }
+
+        // Reset clicked points
+        clickedPoints = [];
+    }
+
+    function clearPointClickElements() {
+        // Remove all point markers
+        pointMarkers.forEach(marker => {
+            farmMap.removeLayer(marker);
+        });
+        pointMarkers = [];
+
+        // Remove preview polygon
+        if (currentPolygonPreview) {
+            farmMap.removeLayer(currentPolygonPreview);
+            currentPolygonPreview = null;
+        }
+    }
+
+    window.clearPolygon = function() {
+        if (drawnItems) {
+            drawnItems.clearLayers();
+        }
+        currentPolygon = null;
+
+        // Clear point click elements
+        clearPointClickElements();
+        clickedPoints = [];
+
+        console.log('🔥 Calling OnPolygonDrawn with empty array from clearPolygon');
+        DotNet.invokeMethodAsync('TrackerGanaderoBlazorHibridMaui', 'OnPolygonDrawn', [])
+            .catch(function(error) {
+                console.error('❌ Error calling OnPolygonDrawn:', error);
+            });
+    };
+
+    // Function to get current map coordinates for C#
+    window.getMapCoordinates = function() {
+        console.log('🔍 getMapCoordinates called, clickedPoints:', clickedPoints);
+
+        if (clickedPoints && clickedPoints.length > 0) {
+            const coords = clickedPoints.map(point => ({
+                lat: point[0],
+                lng: point[1]
+            }));
+            console.log('🔍 Returning coordinates:', coords);
+            return coords;
+        }
+
+        console.log('🔍 No clickedPoints, checking polygon...');
+
+        if (currentPolygon) {
+            const latlngs = currentPolygon.getLatLngs()[0];
+            const coords = latlngs.map(latlng => ({
+                lat: latlng.lat,
+                lng: latlng.lng
+            }));
+            console.log('🔍 Returning polygon coordinates:', coords);
+            return coords;
+        }
+
+        console.log('🔍 No coordinates found');
+        return [];
+    };
+
+    function updatePolygonCoordinates() {
+        if (currentPolygon) {
+            // IMPORTANTE: Usar "Lat" y "Lng" para coincidir con LatLngDto en C#
+            const coordinates = currentPolygon.getLatLngs()[0].map(coord => ({
+                Lat: coord.lat,
+                Lng: coord.lng
+            }));
+
+            console.log('🔥 Calling OnPolygonDrawn from updatePolygonCoordinates:', coordinates);
+            DotNet.invokeMethodAsync('TrackerGanaderoBlazorHibridMaui', 'OnPolygonDrawn', coordinates)
+                .catch(function(error) {
+                    console.error('❌ Error calling OnPolygonDrawn:', error);
+                    });
+        }
+    }
+
+    // Variables for storing animal markers
+    let animalMarkers = [];
+
+    window.updateFarmMapWithAnimals = function(centerLat, centerLng, boundaries, animalsData) {
+        if (!farmMap) return;
+
+        console.log(`Updating farm map with ${animalsData.length} animals`);
+
+        // Clear existing animal markers
+        animalMarkers.forEach(marker => {
+            farmMap.removeLayer(marker);
+        });
+        animalMarkers = [];
+
+        // Center map on farm
+        farmMap.setView([centerLat, centerLng], 15);
+
+        // Clear existing polygon
+        if (drawnItems) {
+            drawnItems.clearLayers();
+        }
+        currentPolygon = null;
+
+        // Draw boundaries if they exist
+        if (boundaries && boundaries.length > 0) {
+            // IMPORTANTE: boundaries viene de C# como LatLngDto[] serializado a JSON
+            // JSON.NET convierte "Lat"/"Lng" a "lat"/"lng" (camelCase)
+            const polygonCoords = boundaries.map(coord => [coord.lat, coord.lng]);
+
+            currentPolygon = L.polygon(polygonCoords, {
+                color: '#ff0000',
+                fillColor: '#ff0000',
+                fillOpacity: 0.35,
+                weight: 2
+            });
+
+            // Add to drawnItems and map
+            drawnItems.addLayer(currentPolygon);
+        }
+
+        // Add animal markers
+        animalsData.forEach(animal => {
+            console.log(`Adding animal marker for ${animal.name} at ${animal.latitude}, ${animal.longitude}`);
+
+            // Determine connection status and color
+            const now = new Date();
+            const locationTime = new Date(animal.timestamp);
+            const timeDiffMinutes = (now - locationTime) / (1000 * 60);
+            const isConnected = timeDiffMinutes <= 10;
+
+            let markerColor = '#4285f4';
+            let connectionStatus = '';
+
+            if (!isConnected) {
+                markerColor = '#6c757d';
+                connectionStatus = 'Desconectado';
+            } else {
+                const status = animal.status?.toLowerCase() || '';
+                connectionStatus = 'Conectado';
+
+                if (status === 'healthy' || status === 'saludable') {
+                    markerColor = '#34a853';
+                } else if (status === 'sick' || status === 'enfermo') {
+                    markerColor = '#ea4335';
+                } else if (status === 'monitoring' || status === 'en observación') {
+                    markerColor = '#fbbc04';
+                }
+            }
+
+            // Create cow icon with pulse animation
+            const cowIcon = L.divIcon({
+                html: `
+                    <div class="cow-marker-with-pulse" style="
+                        background-color: ${markerColor};
+                        border: 3px solid #fff;
+                        border-radius: 50%;
+                        width: 40px;
+                        height: 40px;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        font-size: 20px;
+                        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+                        cursor: pointer;
+                    ">
+                        🐄
+                    </div>
+                `,
+                className: 'custom-cow-marker',
+                iconSize: [40, 40],
+                iconAnchor: [20, 20]
+            });
+
+            // Create marker
+            const marker = L.marker([animal.latitude, animal.longitude], {
+                icon: cowIcon,
+                animalId: animal.id
+            });
+
+            // Add popup with animal information
+            const popupContent = `
+                <div style="min-width: 200px;">
+                    <h6 style="margin: 0 0 8px 0; font-weight: bold; color: #333;">${animal.name}</h6>
+                    ${animal.tag ? `<p style="margin: 4px 0;"><strong>Tag:</strong> ${animal.tag}</p>` : ''}
+                    <p style="margin: 4px 0;"><strong>Conexión:</strong> <span style="color: ${isConnected ? '#28a745' : '#dc3545'}; font-weight: bold;">${connectionStatus}</span></p>
+                    <p style="margin: 4px 0;"><strong>Estado:</strong> ${animal.status}</p>
+                    <p style="margin: 4px 0;"><strong>Coordenadas:</strong> ${animal.latitude.toFixed(6)}, ${animal.longitude.toFixed(6)}</p>
+                    <p style="margin: 4px 0;"><strong>Velocidad:</strong> ${animal.speed || 0} km/h</p>
+                    <p style="margin: 4px 0;"><strong>Temperatura:</strong> ${animal.temperature || 'N/A'}°C</p>
+                    <p style="margin: 4px 0;"><strong>Actividad:</strong> ${animal.activityLevel || 'N/A'}</p>
+                    <p style="margin: 4px 0;"><strong>Última actualización:</strong> ${new Date(animal.timestamp).toLocaleTimeString()}</p>
+                </div>
+            `;
+
+            marker.bindPopup(popupContent);
+
+            // Add hover events
+            marker.on('mouseover', function() {
+                this.openPopup();
+            });
+
+            marker.on('mouseout', function() {
+                this.closePopup();
+            });
+
+            // Add to map and store reference
+            marker.addTo(farmMap);
+            animalMarkers.push(marker);
+        });
+
+        // Adjust map view to show both boundaries and animals
+        if (boundaries && boundaries.length > 0 && animalsData.length > 0) {
+            const allLatLngs = [
+                ...boundaries.map(coord => L.latLng(coord.latitude, coord.longitude)),
+                ...animalsData.map(animal => L.latLng(animal.latitude, animal.longitude))
+            ];
+            const group = L.latLngBounds(allLatLngs);
+            farmMap.fitBounds(group, { padding: [20, 20] });
+        } else if (boundaries && boundaries.length > 0) {
+            // Fit to boundaries only
+            const group = new L.featureGroup([currentPolygon]);
+            farmMap.fitBounds(group.getBounds(), { padding: [20, 20] });
+        } else if (animalsData.length > 0) {
+            // Fit to animals only
+            const animalGroup = new L.featureGroup(animalMarkers);
+            farmMap.fitBounds(animalGroup.getBounds(), { padding: [20, 20] });
+        }
+
+        console.log(`Farm map updated with ${animalsData.length} animal markers`);
+
+        // Check geofencing for each animal
+        if (boundaries && boundaries.length >= 3) {
+            checkGeofencingAlerts(boundaries, animalsData);
+        }
+    };
+
+    // Function to check if a point is inside a polygon using ray casting algorithm
+    // Nota: point y polygon deben usar el formato [lat, lng] para consistencia con Leaflet
+    function isPointInPolygon(point, polygon) {
+        // point[0] = latitud, point[1] = longitud
+        let lat = point[0], lng = point[1];
+        let inside = false;
+
+        for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+            let lat_i = polygon[i][0], lng_i = polygon[i][1];
+            let lat_j = polygon[j][0], lng_j = polygon[j][1];
+
+            // Ray casting algorithm: cuenta cuántas veces cruza un rayo horizontal desde el punto
+            if (((lng_i > lng) !== (lng_j > lng)) &&
+                (lat < (lat_j - lat_i) * (lng - lng_i) / (lng_j - lng_i) + lat_i)) {
+                inside = !inside;
+            }
+        }
+
+        return inside;
+    }
+
+    // Function to check geofencing alerts
+    function checkGeofencingAlerts(boundaries, animalsData) {
+        // IMPORTANTE: boundaries viene de C# como LatLngDto[] serializado a JSON
+        // JSON.NET convierte "Lat"/"Lng" a "lat"/"lng" (camelCase)
+        // Usar el mismo orden [lat, lng] que Leaflet usa para dibujar
+        const polygon = boundaries.map(coord => [coord.lat, coord.lng]);
+
+        animalsData.forEach(animal => {
+            // IMPORTANTE: Mismo orden [lat, lng] para consistencia
+            const animalPoint = [animal.latitude, animal.longitude];
+            const isInside = isPointInPolygon(animalPoint, polygon);
+
+            console.log(`🔍 Geofencing check - ${animal.name}: ${isInside ? 'DENTRO' : 'FUERA'} del área`);
+
+            // You can add visual indicators here
+            if (!isInside) {
+                console.log(`⚠️ ALERTA: ${animal.name} está FUERA del área de geofencing!`);
+                // Optionally change marker appearance for animals outside the area
+                updateMarkerForGeofenceStatus(animal.id, false);
+            } else {
+                updateMarkerForGeofenceStatus(animal.id, true);
+            }
+        });
+    }
+
+    // Function to update marker appearance based on geofencing status
+    function updateMarkerForGeofenceStatus(animalId, isInside) {
+        // Find the marker for this animal
+        const marker = animalMarkers.find(m => m.options.animalId === animalId);
+        if (marker) {
+            // Add a border indicator for geofencing status
+            const element = marker.getElement();
+            if (element) {
+                const markerDiv = element.querySelector('.cow-marker-with-pulse');
+                if (markerDiv) {
+                    if (isInside) {
+                        markerDiv.style.border = '3px solid #fff'; // Normal border
+                    } else {
+                        markerDiv.style.border = '4px solid #ff4444'; // Red border for outside
+                        markerDiv.style.animation = 'cowPulse 1s ease-in-out infinite, geofenceAlert 2s ease-in-out infinite';
+                    }
+                }
+            }
+        }
+    }
+
+    // Function to check if map exists and is initialized
+    window.checkMapExists = function() {
+        try {
+            const mapElement = document.getElementById("farmMap");
+            const exists = mapElement && farmMap && farmMap._container === mapElement;
+            console.log(`checkMapExists: mapElement=${!!mapElement}, farmMap=${!!farmMap}, result=${!!exists}`);
+            return !!exists; // Convert to explicit boolean
+        } catch (e) {
+            console.error("Error in checkMapExists:", e);
+            return false;
+        }
+    };
+
+    // Function to cleanup and reset map for reinitialization
+    window.cleanupFarmMap = function() {
+        if (farmMap) {
+            try {
+                farmMap.remove();
+            } catch (e) {
+                console.log("Map cleanup warning:", e.message);
+            }
+        }
+        farmMap = null;
+        drawnItems = null;
+        drawControl = null;
+        currentPolygon = null;
+
+        // Clear the map container
+        const mapElement = document.getElementById("farmMap");
+        if (mapElement) {
+            mapElement.innerHTML = '';
+        }
+    };
+</script>
+
+<style>
+    .modal.show {
+        display: block !important;
+    }
+
+    .point-label {
+        background: #ff6b6b !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 3px !important;
+        font-size: 11px !important;
+        font-weight: bold !important;
+        padding: 2px 6px !important;
+    }
+
+    .point-label::before {
+        border-top-color: #ff6b6b !important;
+    }
+
+    .point-label-with-coords {
+        background: #28a745 !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 4px !important;
+        font-size: 10px !important;
+        font-weight: bold !important;
+        padding: 4px 8px !important;
+        text-align: center !important;
+        line-height: 1.2 !important;
+        white-space: nowrap !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3) !important;
+    }
+
+    .point-label-with-coords::before {
+        border-top-color: #28a745 !important;
+    }
+
+    /* Geofencing alert animation */
+    @@keyframes geofenceAlert {
+        0% { box-shadow: 0 0 0 0 rgba(255, 68, 68, 0.7); }
+        70% { box-shadow: 0 0 0 10px rgba(255, 68, 68, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(255, 68, 68, 0); }
+    }
+
+    /* ✅ Central Point Marker Styles */
+    .central-point-marker {
+        z-index: 1000 !important;
+    }
+
+    .central-point-icon {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+    }
+
+    .central-point-inner {
+        font-size: 24px;
+        filter: drop-shadow(2px 2px 4px rgba(0,0,0,0.5));
+        animation: centralPointPulse 2s ease-in-out infinite;
+    }
+
+    .central-point-label {
+        background: linear-gradient(135deg, #4a90e2, #357abd);
+        color: white;
+        font-size: 10px;
+        font-weight: bold;
+        padding: 2px 6px;
+        border-radius: 4px;
+        margin-top: 2px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+        white-space: nowrap;
+    }
+
+    /* Central point pulse animation */
+    @@keyframes centralPointPulse {
+        0% { transform: scale(1); }
+        50% { transform: scale(1.1); }
+        100% { transform: scale(1); }
+    }
+</style>

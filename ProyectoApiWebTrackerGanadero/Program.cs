@@ -150,7 +150,8 @@ builder.Services.AddCors(options =>
     {
         policyBuilder
             .WithOrigins("http://localhost:3000", "http://localhost:5000", "https://localhost:5001", "http://192.168.1.100:5192",
-                        "http://localhost:7218", "https://localhost:7218", "http://localhost:5236", "https://localhost:5236")
+                        "http://localhost:7218", "https://localhost:7218", "http://localhost:5236", "https://localhost:5236",
+                        "http://localhost:5280")
             .AllowAnyMethod()
             .AllowAnyHeader()
             .AllowCredentials(); // Required for SignalR
@@ -195,7 +196,10 @@ if (app.Environment.IsDevelopment())
 app.UseMiddleware<RequestLoggingMiddleware>();
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
-app.UseHttpsRedirection();
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 if (!app.Environment.IsDevelopment())
 {

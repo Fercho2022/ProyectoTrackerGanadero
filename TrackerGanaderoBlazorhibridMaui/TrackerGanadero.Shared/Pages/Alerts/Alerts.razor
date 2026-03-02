@@ -1,0 +1,731 @@
+@page "/alerts"
+@using TrackerGanadero.Shared.Models
+@using TrackerGanadero.Shared.Services
+@inject AlertService AlertService
+@inject SignalRService SignalRService
+@implements IDisposable
+
+<div class="container-fluid">
+    <!-- Page Header -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <h2 class="mb-1">⚠️ Sistema de Alertas</h2>
+                    <p class="text-muted">Monitoreo y gestión de alertas del ganado</p>
+                </div>
+                <div class="d-flex gap-2">
+                    <span class="badge bg-@(_signalRConnected ? "success" : "danger") p-2">
+                        @(_signalRConnected ? "🟢 Tiempo Real" : "🔴 Desconectado")
+                    </span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Alert Stats -->
+    <div class="row mb-4">
+        <div class="col-md-3">
+            <div class="card bg-danger text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h4 class="mb-0">@_highPriorityCount</h4>
+                            <p class="mb-0">Alta Prioridad</p>
+                        </div>
+                        <i class="fas fa-exclamation-triangle fa-2x"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-warning text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h4 class="mb-0">@_mediumPriorityCount</h4>
+                            <p class="mb-0">Media Prioridad</p>
+                        </div>
+                        <i class="fas fa-exclamation-circle fa-2x"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-info text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h4 class="mb-0">@_lowPriorityCount</h4>
+                            <p class="mb-0">Baja Prioridad</p>
+                        </div>
+                        <i class="fas fa-info-circle fa-2x"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card bg-success text-white">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between">
+                        <div>
+                            <h4 class="mb-0">@_resolvedTodayCount</h4>
+                            <p class="mb-0">Resueltas Hoy</p>
+                        </div>
+                        <i class="fas fa-check-circle fa-2x"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="row mb-3">
+        <div class="col-md-8">
+            <div class="d-flex gap-2">
+                <select class="form-select" @onchange="OnSeverityFilterChanged">
+                    <option value="">Todas las prioridades</option>
+                    <option value="high">Alta</option>
+                    <option value="medium">Media</option>
+                    <option value="low">Baja</option>
+                </select>
+                <select class="form-select" @onchange="OnStatusFilterChanged">
+                    <option value="">Todos los estados</option>
+                    <option value="active">Activas</option>
+                    <option value="resolved">Resueltas</option>
+                </select>
+                <select class="form-select" @onchange="OnTypeFilterChanged">
+                    <option value="">Todos los tipos</option>
+
+                    <!-- Alertas de Ubicación -->
+                    <optgroup label="🗺️ Ubicación y Movimiento">
+                        <option value="OutOfBounds">Fuera de Límites</option>
+                        <option value="Immobility">Inmóvil</option>
+                    </optgroup>
+
+                    <!-- Alertas de Seguridad -->
+                    <optgroup label="🚨 Seguridad">
+                        <option value="NightMovement">Movimiento Nocturno</option>
+                        <option value="SuddenExit">Salida Súbita</option>
+                        <option value="UnusualSpeed">Velocidad Anormal</option>
+                        <option value="TrackerManipulation">Manipulación de Tracker</option>
+                        <option value="AbruptDisconnection">Desconexión Abrupta</option>
+                    </optgroup>
+
+                    <!-- Alertas de Actividad -->
+                    <optgroup label="🏃 Actividad">
+                        <option value="LowActivity">Baja Actividad</option>
+                        <option value="HighActivity">Alta Actividad</option>
+                        <option value="PossibleHeat">Posible Celo</option>
+                    </optgroup>
+
+                    <!-- Alertas de Tracker -->
+                    <optgroup label="🔋 Estado del Tracker">
+                        <option value="BatteryLow">Batería Baja</option>
+                        <option value="BatteryCritical">Batería Crítica</option>
+                        <option value="NoSignal">Sin Señal</option>
+                        <option value="WeakSignal">Señal Débil</option>
+                        <option value="InvalidCoordinates">Coordenadas Inválidas</option>
+                        <option value="LocationJump">Salto de Ubicación</option>
+                    </optgroup>
+                </select>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="input-group">
+                <span class="input-group-text"><i class="fas fa-search"></i></span>
+                <input type="text" class="form-control" placeholder="Buscar alertas..."
+                       @bind="_searchTerm" @oninput="OnSearchChanged" />
+            </div>
+        </div>
+    </div>
+
+    <!-- Alerts List -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Alertas (@_filteredAlerts.Count)</h5>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input" type="checkbox" @onchange="OnAutoRefreshChanged" checked="@_autoRefresh">
+                            <label class="form-check-label">Auto-actualizar</label>
+                        </div>
+                    </div>
+                </div>
+                <div class="card-body p-0">
+                    @if (_isLoading)
+                    {
+                        <div class="text-center py-5">
+                            <div class="spinner-border text-primary" role="status"></div>
+                            <p class="mt-3">Cargando alertas...</p>
+                        </div>
+                    }
+                    else if (_filteredAlerts.Any())
+                    {
+                        <div class="list-group list-group-flush">
+                            @foreach (var alert in _filteredAlerts.OrderByDescending(a => a.CreatedAt))
+                            {
+                                <div class="list-group-item @(alert.IsResolved ? "bg-light" : "")"
+                                     style="@(alert.IsResolved ? "opacity: 0.7;" : "")">
+                                    <div class="d-flex justify-content-between align-items-start">
+                                        <div class="flex-grow-1">
+                                            <div class="d-flex align-items-center mb-2">
+                                                <span class="badge bg-@GetSeverityColor(alert.Severity) me-2">
+                                                    @GetSeverityIcon(alert.Severity) @alert.Severity.ToUpper()
+                                                </span>
+                                                <span class="badge bg-secondary me-2">@alert.Type</span>
+                                                <small class="text-muted">
+                                                    @ToLocalTime(alert.CreatedAt).ToString("dd/MM/yyyy HH:mm")
+                                                </small>
+                                                @if (alert.IsResolved)
+                                                {
+                                                    <span class="badge bg-success ms-2">
+                                                        <i class="fas fa-check"></i> Resuelta
+                                                    </span>
+                                                }
+                                            </div>
+
+                                            <h6 class="mb-1">@alert.Title</h6>
+                                            <p class="mb-2 text-muted">@alert.Message</p>
+
+                                            @if (!string.IsNullOrEmpty(alert.AnimalName))
+                                            {
+                                                <div class="d-flex align-items-center text-muted">
+                                                    <i class="fas fa-cow me-2"></i>
+                                                    <span>Animal: <strong>@alert.AnimalName</strong></span>
+                                                    @if (!string.IsNullOrEmpty(alert.FarmName))
+                                                    {
+                                                        <span class="ms-3">
+                                                            <i class="fas fa-map-marker-alt me-1"></i>
+                                                            Granja: <strong>@alert.FarmName</strong>
+                                                        </span>
+                                                    }
+                                                </div>
+                                            }
+
+                                            @if (alert.IsResolved && alert.ResolvedAt.HasValue)
+                                            {
+                                                <div class="text-success mt-2">
+                                                    <i class="fas fa-check-circle me-1"></i>
+                                                    Resuelta el @ToLocalTime(alert.ResolvedAt.Value).ToString("dd/MM/yyyy HH:mm")
+                                                </div>
+                                            }
+                                        </div>
+
+                                        <div class="ms-3">
+                                            @if (!alert.IsResolved)
+                                            {
+                                                <button class="btn btn-sm btn-success" @onclick="() => ResolveAlert(alert.Id)">
+                                                    <i class="fas fa-check"></i> Resolver
+                                                </button>
+                                            }
+                                            <button class="btn btn-sm btn-outline-primary ms-1" @onclick="() => ViewAlertDetails(alert)">
+                                                <i class="fas fa-eye"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="text-center py-5">
+                            <i class="fas fa-shield-alt fa-3x text-muted mb-3"></i>
+                            <h5 class="text-muted">No hay alertas</h5>
+                            <p class="text-muted">
+                                @if (string.IsNullOrEmpty(_searchTerm) && string.IsNullOrEmpty(_severityFilter) && string.IsNullOrEmpty(_statusFilter))
+                                {
+                                    <span>¡Excelente! No tienes alertas pendientes.</span>
+                                }
+                                else
+                                {
+                                    <span>No se encontraron alertas que coincidan con los filtros aplicados.</span>
+                                }
+                            </p>
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Alert Details Modal -->
+<div class="modal fade @(_showDetailsModal ? "show d-block" : "")" tabindex="-1" style="@(_showDetailsModal ? "background: rgba(0,0,0,0.5);" : "")">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            @if (_selectedAlert != null)
+            {
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <span class="badge bg-@GetSeverityColor(_selectedAlert.Severity) me-2">
+                            @_selectedAlert.Severity.ToUpper()
+                        </span>
+                        @_selectedAlert.Title
+                    </h5>
+                    <button type="button" class="btn-close" @onclick="CloseDetailsModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6>Información General</h6>
+                            <table class="table table-sm">
+                                <tr>
+                                    <td><strong>Tipo:</strong></td>
+                                    <td>@_selectedAlert.Type</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Prioridad:</strong></td>
+                                    <td>
+                                        <span class="badge bg-@GetSeverityColor(_selectedAlert.Severity)">
+                                            @_selectedAlert.Severity
+                                        </span>
+                                    </td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Fecha:</strong></td>
+                                    <td>@_selectedAlert.CreatedAt.ToString("dd/MM/yyyy HH:mm:ss")</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>Estado:</strong></td>
+                                    <td>
+                                        @if (_selectedAlert.IsResolved)
+                                        {
+                                            <span class="badge bg-success">Resuelta</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge bg-warning">Pendiente</span>
+                                        }
+                                    </td>
+                                </tr>
+                            </table>
+                        </div>
+                        <div class="col-md-6">
+                            <h6>Detalles del Animal/Granja</h6>
+                            <table class="table table-sm">
+                                @if (!string.IsNullOrEmpty(_selectedAlert.AnimalName))
+                                {
+                                    <tr>
+                                        <td><strong>Animal:</strong></td>
+                                        <td>@_selectedAlert.AnimalName</td>
+                                    </tr>
+                                }
+                                @if (!string.IsNullOrEmpty(_selectedAlert.FarmName))
+                                {
+                                    <tr>
+                                        <td><strong>Granja:</strong></td>
+                                        <td>@_selectedAlert.FarmName</td>
+                                    </tr>
+                                }
+                                @if (_selectedAlert.IsResolved && _selectedAlert.ResolvedAt.HasValue)
+                                {
+                                    <tr>
+                                        <td><strong>Resuelta:</strong></td>
+                                        <td>@_selectedAlert.ResolvedAt.Value.ToString("dd/MM/yyyy HH:mm:ss")</td>
+                                    </tr>
+                                }
+                            </table>
+                        </div>
+                    </div>
+
+                    <h6>Descripción</h6>
+                    <div class="alert alert-@GetSeverityColor(_selectedAlert.Severity)">
+                        @_selectedAlert.Message
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    @if (!_selectedAlert.IsResolved)
+                    {
+                        <button type="button" class="btn btn-success" @onclick="() => ResolveAlert(_selectedAlert.Id)">
+                            <i class="fas fa-check"></i> Resolver Alerta
+                        </button>
+                    }
+                    <button type="button" class="btn btn-secondary" @onclick="CloseDetailsModal">Cerrar</button>
+                </div>
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private List<AlertDto> _alerts = new();
+    private List<AlertDto> _filteredAlerts = new();
+    private string _searchTerm = "";
+    private string _severityFilter = "";
+    private string _statusFilter = "";
+    private string _typeFilter = "";
+    private bool _isLoading = true;
+    private bool _signalRConnected = false;
+    private bool _autoRefresh = true;
+    private bool _showDetailsModal = false;
+    private AlertDto? _selectedAlert;
+    private CancellationTokenSource? _cancellationTokenSource;
+
+    // Stats
+    private int _highPriorityCount = 0;
+    private int _mediumPriorityCount = 0;
+    private int _lowPriorityCount = 0;
+    private int _resolvedTodayCount = 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAlerts();
+        await InitializeSignalR();
+        StartAutoRefresh();
+    }
+
+    private async Task LoadAlerts()
+    {
+        try
+        {
+            _isLoading = true;
+            _alerts = await AlertService.GetAlertsAsync();
+            CalculateStats();
+            await ApplyFilters();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading alerts: {ex.Message}");
+        }
+        finally
+        {
+            _isLoading = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void CalculateStats()
+    {
+        var activeAlerts = _alerts.Where(a => !a.IsResolved).ToList();
+        _highPriorityCount = activeAlerts.Count(a => a.Severity.ToLower() == "high");
+        _mediumPriorityCount = activeAlerts.Count(a => a.Severity.ToLower() == "medium");
+        _lowPriorityCount = activeAlerts.Count(a => a.Severity.ToLower() == "low");
+
+        var today = DateTime.Today;
+        _resolvedTodayCount = _alerts.Count(a => a.IsResolved && a.ResolvedAt?.Date == today);
+    }
+
+    private async Task InitializeSignalR()
+    {
+        try
+        {
+            SignalRService.ConnectionStatusChanged += async (status) =>
+            {
+                await InvokeAsync(() =>
+                {
+                    _signalRConnected = status == "Connected";
+                    StateHasChanged();
+                });
+            };
+
+            SignalRService.AlertReceived += async (alert) =>
+            {
+                await InvokeAsync(async () =>
+                {
+                    _alerts.Insert(0, alert);
+                    CalculateStats();
+                    await ApplyFilters();
+                    StateHasChanged();
+                });
+            };
+
+            SignalRService.AlertResolved += async (alert) =>
+            {
+                await InvokeAsync(async () =>
+                {
+                    // Remove resolved alert from the list automatically
+                    var existingAlert = _alerts.FirstOrDefault(a => a.Id == alert.Id);
+                    if (existingAlert != null)
+                    {
+                        _alerts.Remove(existingAlert);
+                        CalculateStats();
+                        await ApplyFilters();
+                        StateHasChanged();
+                        Console.WriteLine($"✅ Alert {alert.Id} auto-removed from list: {alert.Message}");
+                    }
+                });
+            };
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error initializing SignalR: {ex.Message}");
+        }
+    }
+
+    private async Task ApplyFilters()
+    {
+        _filteredAlerts = _alerts.Where(alert =>
+        {
+            // Search filter
+            if (!string.IsNullOrEmpty(_searchTerm))
+            {
+                var searchLower = _searchTerm.ToLower();
+                if (!alert.Title.ToLower().Contains(searchLower) &&
+                    !alert.Message.ToLower().Contains(searchLower) &&
+                    (string.IsNullOrEmpty(alert.AnimalName) || !alert.AnimalName.ToLower().Contains(searchLower)))
+                {
+                    return false;
+                }
+            }
+
+            // Severity filter
+            if (!string.IsNullOrEmpty(_severityFilter) &&
+                !alert.Severity.Equals(_severityFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            // Status filter
+            if (!string.IsNullOrEmpty(_statusFilter))
+            {
+                if (_statusFilter == "active" && alert.IsResolved)
+                    return false;
+                if (_statusFilter == "resolved" && !alert.IsResolved)
+                    return false;
+            }
+
+            // Type filter
+            if (!string.IsNullOrEmpty(_typeFilter) &&
+                !alert.Type.Equals(_typeFilter, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            return true;
+        }).ToList();
+
+        await InvokeAsync(StateHasChanged);
+    }
+
+
+    private async Task ResolveAlert(int alertId)
+    {
+        try
+        {
+            await AlertService.ResolveAlertAsync(alertId);
+
+            // Update local state
+            var alert = _alerts.FirstOrDefault(a => a.Id == alertId);
+            if (alert != null)
+            {
+                alert.IsResolved = true;
+                alert.ResolvedAt = DateTime.UtcNow; // Store in UTC, display will convert to local
+            }
+
+            CalculateStats();
+            await ApplyFilters();
+            CloseDetailsModal();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error resolving alert: {ex.Message}");
+        }
+    }
+
+    private void ViewAlertDetails(AlertDto alert)
+    {
+        _selectedAlert = alert;
+        _showDetailsModal = true;
+    }
+
+    private void CloseDetailsModal()
+    {
+        _showDetailsModal = false;
+        _selectedAlert = null;
+    }
+
+    private async Task OnSeverityFilterChanged(ChangeEventArgs e)
+    {
+        _severityFilter = e.Value?.ToString() ?? "";
+        await ApplyFilters();
+    }
+
+    private async Task OnStatusFilterChanged(ChangeEventArgs e)
+    {
+        _statusFilter = e.Value?.ToString() ?? "";
+        await ApplyFilters();
+    }
+
+    private async Task OnTypeFilterChanged(ChangeEventArgs e)
+    {
+        _typeFilter = e.Value?.ToString() ?? "";
+        await ApplyFilters();
+    }
+
+    private async Task OnSearchChanged(ChangeEventArgs e)
+    {
+        _searchTerm = e.Value?.ToString() ?? "";
+        await ApplyFilters();
+    }
+
+    private void OnAutoRefreshChanged(ChangeEventArgs e)
+    {
+        _autoRefresh = (bool)(e.Value ?? false);
+        StartAutoRefresh(); // Restart the auto-refresh with new setting
+        StateHasChanged(); // Force UI update to show/hide manual refresh button
+    }
+
+    private void StartAutoRefresh()
+    {
+        // Stop existing auto-refresh if any
+        try
+        {
+            _cancellationTokenSource?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Token source was already disposed, ignore
+        }
+
+        // Wait a bit for the previous task to finish
+        Task.Delay(100).ContinueWith(_ =>
+        {
+            try
+            {
+                _cancellationTokenSource?.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Already disposed, ignore
+            }
+
+            if (_autoRefresh)
+            {
+                _cancellationTokenSource = new CancellationTokenSource();
+                _ = Task.Run(async () => await AutoRefreshWorker(_cancellationTokenSource.Token));
+            }
+        });
+    }
+
+    private async Task AutoRefreshWorker(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (!cancellationToken.IsCancellationRequested && _autoRefresh)
+            {
+                try
+                {
+                    await Task.Delay(30000, cancellationToken); // Wait 30 seconds
+                }
+                catch (OperationCanceledException)
+                {
+                    break; // Exit gracefully when cancelled
+                }
+
+                if (!cancellationToken.IsCancellationRequested && _autoRefresh)
+                {
+                    try
+                    {
+                        await InvokeAsync(async () =>
+                        {
+                            try
+                            {
+                                await LoadAlerts();
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"Error in auto-refresh LoadAlerts: {ex.Message}");
+                            }
+                        });
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        // Component might be disposed, stop the worker
+                        break;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error in auto-refresh InvokeAsync: {ex.Message}");
+                    }
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when cancellation is requested
+        }
+        catch (ObjectDisposedException)
+        {
+            // Token source was disposed, exit gracefully
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error in auto-refresh worker: {ex.Message}");
+        }
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            _cancellationTokenSource?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Already disposed, ignore
+        }
+
+        // Don't dispose immediately, let the task finish first
+        Task.Delay(200).ContinueWith(_ =>
+        {
+            try
+            {
+                _cancellationTokenSource?.Dispose();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Already disposed, ignore
+            }
+        });
+    }
+
+    private string GetSeverityColor(string severity)
+    {
+        return severity.ToLower() switch
+        {
+            "critical" => "dark",
+            "high" => "danger",
+            "medium" => "warning",
+            "low" => "info",
+            _ => "secondary"
+        };
+    }
+
+    private string GetSeverityIcon(string severity)
+    {
+        return severity.ToLower() switch
+        {
+            "critical" => "🚨",
+            "high" => "🔴",
+            "medium" => "🟡",
+            "low" => "🔵",
+            _ => "⚪"
+        };
+    }
+
+    /// <summary>
+    /// Converts UTC DateTime to Argentina local time (UTC-3)
+    /// </summary>
+    private DateTime ToLocalTime(DateTime utcDateTime)
+    {
+        try
+        {
+            // Argentina timezone is UTC-3 (America/Argentina/Buenos_Aires)
+            var argentinaTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Argentina Standard Time");
+            return TimeZoneInfo.ConvertTimeFromUtc(utcDateTime, argentinaTimeZone);
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            // Fallback for systems that might not have the timezone
+            return utcDateTime.AddHours(-3);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error converting timezone: {ex.Message}");
+            return utcDateTime.AddHours(-3); // Default to UTC-3
+        }
+    }
+}

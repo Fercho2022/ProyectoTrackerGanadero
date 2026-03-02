@@ -1,6 +1,6 @@
-﻿using Microsoft.AspNetCore.Components.WebView.Maui;
+using Microsoft.AspNetCore.Components.WebView.Maui;
 using TrackerGanaderoBlazorHibridMaui.Services;
-using Microsoft.AspNetCore.SignalR.Client;
+using TrackerGanadero.Shared.Services;
 using Microsoft.Extensions.Configuration;
 using System.Reflection;
 
@@ -25,30 +25,35 @@ public static class MauiProgram
 #endif
 
 		// Configuration
-        var assembly = Assembly.GetExecutingAssembly();
-        using var stream = assembly.GetManifestResourceStream("TrackerGanaderoBlazorHibridMaui.appsettings.json");
+		var assembly = Assembly.GetExecutingAssembly();
+		using var stream = assembly.GetManifestResourceStream("TrackerGanaderoBlazorHibridMaui.appsettings.json");
 
-        if (stream != null)
-        {
-            var config = new ConfigurationBuilder()
-                .AddJsonStream(stream)
-                .Build();
-            builder.Configuration.AddConfiguration(config);
-        }
+		if (stream != null)
+		{
+			var config = new ConfigurationBuilder()
+				.AddJsonStream(stream)
+				.Build();
+			builder.Configuration.AddConfiguration(config);
+		}
+
+		// Platform-specific interface implementations (MAUI)
+		builder.Services.AddSingleton<ITokenStorageService, MauiTokenStorageService>();
+		builder.Services.AddSingleton<IGeolocationService, MauiGeolocationService>();
+		builder.Services.AddSingleton<ITextToSpeech>(TextToSpeech.Default);
+		builder.Services.AddSingleton<ITextToSpeechService, MauiTextToSpeechService>();
 
 		// HttpClient Configuration
 		var httpClientConfiguration = (HttpClient client) =>
 		{
 			try
 			{
-                var baseUrl = builder.Configuration["ApiSettings:BaseUrl"];
+				var baseUrl = builder.Configuration["ApiSettings:BaseUrl"];
 				client.BaseAddress = new Uri(baseUrl);
 				client.DefaultRequestHeaders.Add("Accept", "application/json");
 				client.Timeout = TimeSpan.FromSeconds(30);
 			}
 			catch (Exception ex)
 			{
-				// Log error but don't crash the app
 				System.Diagnostics.Debug.WriteLine($"Error configuring HttpClient: {ex.Message}");
 			}
 		};
@@ -74,25 +79,24 @@ public static class MauiProgram
 		};
 
 		// HttpClients for different services
-        builder.Services.AddTransient<AuthHeaderHandler>();
+		builder.Services.AddTransient<AuthHeaderHandler>();
 
 		builder.Services.AddHttpClient<HttpService>(httpClientConfiguration)
 			.ConfigurePrimaryHttpMessageHandler(httpMessageHandlerConfiguration)
-            .AddHttpMessageHandler<AuthHeaderHandler>();
+			.AddHttpMessageHandler<AuthHeaderHandler>();
 
 		builder.Services.AddHttpClient<LicenseService>(httpClientConfiguration)
 			.ConfigurePrimaryHttpMessageHandler(httpMessageHandlerConfiguration)
-            .AddHttpMessageHandler<AuthHeaderHandler>();
+			.AddHttpMessageHandler<AuthHeaderHandler>();
 
 		builder.Services.AddHttpClient<TrackerManagementService>(httpClientConfiguration)
 			.ConfigurePrimaryHttpMessageHandler(httpMessageHandlerConfiguration)
-            .AddHttpMessageHandler<AuthHeaderHandler>();
+			.AddHttpMessageHandler<AuthHeaderHandler>();
 
-		// HttpClient for NavigationService (GraphHopper - no auth header needed)
 		builder.Services.AddHttpClient<NavigationService>()
 			.ConfigurePrimaryHttpMessageHandler(httpMessageHandlerConfiguration);
 
-		// Services
+		// Shared Services
 		builder.Services.AddScoped<AuthService>();
 		builder.Services.AddSingleton<AnimalService>();
 		builder.Services.AddSingleton<HealthService>();
@@ -101,18 +105,9 @@ public static class MauiProgram
 		builder.Services.AddSingleton<FarmService>();
 		builder.Services.AddSingleton<TrackingService>();
 		builder.Services.AddSingleton<FarmTrackerService>();
-		// NavigationService is already registered via AddHttpClient above (line 92-93)
-		// LicenseService and TrackerManagementService are already registered as HttpClient above
-        // SettingsStateService is new
-        builder.Services.AddSingleton<SettingsStateService>();
-
-		// Voice Navigation
-		builder.Services.AddSingleton<ITextToSpeech>(TextToSpeech.Default);
+		builder.Services.AddSingleton<SettingsStateService>();
 		builder.Services.AddSingleton<VoiceNavigationService>();
-
-		// Additional Services
 
 		return builder.Build();
 	}
-
 }

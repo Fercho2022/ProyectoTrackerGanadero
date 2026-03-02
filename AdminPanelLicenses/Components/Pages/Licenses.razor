@@ -3,7 +3,7 @@
 @inject AdminApiService ApiService
 @inject AuthStateService AuthState
 @inject NavigationManager Navigation
-@rendermode InteractiveServer
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @implements IDisposable
 
 <PageTitle>Licencias - Admin Panel</PageTitle>
