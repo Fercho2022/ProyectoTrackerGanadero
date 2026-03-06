@@ -77,8 +77,19 @@ else if (_error != null)
                 ? _availableTrackers
                 : _availableTrackers.Where(t => t.DeviceId.Contains(_searchQuery, StringComparison.OrdinalIgnoreCase)).ToList();
 
-            <div class="alert alert-info">
-                <strong>Trackers Disponibles:</strong> @filteredTrackers.Count trackers listos para asignar
+            <div class="alert alert-info d-flex justify-content-between align-items-center">
+                <div>
+                    <strong>Trackers Disponibles:</strong> @filteredTrackers.Count trackers listos para asignar
+                </div>
+                <div class="form-check mb-0">
+                    <input class="form-check-input"
+                           type="checkbox"
+                           id="selectAllAvailable"
+                           @onchange="(e) => ToggleAllAvailableTrackers(filteredTrackers, (bool)e.Value!)" />
+                    <label class="form-check-label fw-bold" for="selectAllAvailable">
+                        Seleccionar todos
+                    </label>
+                </div>
             </div>
 
             <div class="row g-3">
@@ -626,7 +637,31 @@ else if (_error != null)
     }
 
     /// <summary>
-    /// Selecciona o deselecciona todos los trackers visibles
+    /// Selecciona o deselecciona todos los trackers visibles (para pestaña Disponibles)
+    /// </summary>
+    private void ToggleAllAvailableTrackers(List<TrackerDto> trackers, bool select)
+    {
+        if (select)
+        {
+            // Seleccionar TODOS los trackers filtrados (ya están disponibles)
+            foreach (var tracker in trackers)
+            {
+                _selectedTrackerIds.Add(tracker.Id);
+            }
+        }
+        else
+        {
+            // Deseleccionar todos los visibles
+            foreach (var tracker in trackers)
+            {
+                _selectedTrackerIds.Remove(tracker.Id);
+            }
+        }
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Selecciona o deselecciona todos los trackers visibles (para pestaña Detectados - con filtro de status)
     /// </summary>
     private void ToggleAllTrackers(List<TrackerDto> trackers, bool select)
     {

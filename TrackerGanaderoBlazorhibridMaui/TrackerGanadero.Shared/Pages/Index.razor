@@ -5,6 +5,7 @@
 @inject AlertService AlertService
 @inject FarmService FarmService
 @inject SignalRService SignalRService
+@implements IDisposable
 
 <div class="container-fluid">
     <!-- Page Header -->
@@ -266,17 +267,27 @@
     private int _animalsWithTrackers = 0;
     private int _totalFarms = 0;
     private bool _signalRConnected = false;
+    private bool _disposed = false;
 
     private List<AlertDto>? _recentAlerts;
     private List<AnimalDto>? _recentAnimals;
 
+    private System.Threading.Timer? _autoRefreshTimer;
+
+    // Named handlers for proper unsubscription
+    private Action<string>? _connectionStatusHandler;
+    private Action<AlertDto>? _alertReceivedHandler;
+
     protected override async Task OnInitializedAsync()
     {
         await LoadDashboardData();
-        await InitializeSignalR();
+        InitializeSignalR();
 
-        // Set up auto-refresh
-        var timer = new System.Threading.Timer(async _ => await RefreshData(), null, TimeSpan.Zero, TimeSpan.FromMinutes(1));
+        // Set up auto-refresh every 1 minute (first tick after 60s, not immediately)
+        _autoRefreshTimer = new System.Threading.Timer(async _ =>
+        {
+            if (!_disposed) await RefreshData();
+        }, null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
     }
 
     private async Task LoadDashboardData()
@@ -304,26 +315,27 @@
         }
     }
 
-    private async Task InitializeSignalR()
+    private void InitializeSignalR()
     {
         try
         {
-            // Get token and start SignalR connection
-            // var token = await AuthService.GetTokenAsync();
-            // await SignalRService.StartConnectionAsync(token);
-
-            SignalRService.ConnectionStatusChanged += (status) =>
+            _connectionStatusHandler = (status) =>
             {
+                if (_disposed) return;
                 _signalRConnected = status == "Connected";
                 InvokeAsync(StateHasChanged);
             };
 
-            SignalRService.AlertReceived += (alert) =>
+            _alertReceivedHandler = (alert) =>
             {
+                if (_disposed) return;
                 _recentAlerts?.Insert(0, alert);
                 _activeAlerts++;
                 InvokeAsync(StateHasChanged);
             };
+
+            SignalRService.ConnectionStatusChanged += _connectionStatusHandler;
+            SignalRService.AlertReceived += _alertReceivedHandler;
         }
         catch (Exception ex)
         {
@@ -365,7 +377,22 @@
             "healthy" => "Saludable",
             "sick" => "Enfermo",
             "monitoring" => "En observación",
-            _ => status  // Si ya está en español o es otro estado, devolver tal como está
+            _ => status
         };
+    }
+
+    public void Dispose()
+    {
+        _disposed = true;
+
+        // Dispose timer
+        _autoRefreshTimer?.Dispose();
+        _autoRefreshTimer = null;
+
+        // Unsubscribe SignalR event handlers to prevent memory leaks
+        if (_connectionStatusHandler != null)
+            SignalRService.ConnectionStatusChanged -= _connectionStatusHandler;
+        if (_alertReceivedHandler != null)
+            SignalRService.AlertReceived -= _alertReceivedHandler;
     }
 }

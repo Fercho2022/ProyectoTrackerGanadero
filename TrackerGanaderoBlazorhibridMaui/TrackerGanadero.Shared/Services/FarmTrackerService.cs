@@ -100,6 +100,52 @@ namespace TrackerGanadero.Shared.Services
         }
 
         /// <summary>
+        /// Obtiene todos los animales de una granja con su información de tracker en una sola consulta
+        /// OPTIMIZACIÓN: Elimina el problema N+1 de hacer 120+ requests individuales
+        /// </summary>
+        public async Task<Dictionary<int, AnimalTrackerInfoDto?>> GetFarmAnimalsWithTrackersAsync(int farmId)
+        {
+            try
+            {
+                _logger.LogInformation("Getting all animals with trackers for farm {FarmId} in single request", farmId);
+                var response = await _httpService.GetAsync<FarmAnimalsWithTrackersResponse>($"api/FarmTracker/farm/{farmId}/animals-with-trackers");
+
+                if (response?.success == true && response.animals != null)
+                {
+                    // Convert list to dictionary for easy lookup by animal ID using LINQ
+                    var result = response.animals.ToDictionary(a => a.AnimalId, a => a.TrackerInfo);
+                    _logger.LogInformation("Retrieved tracker info for {Count} animals in single request", result.Count);
+                    return result;
+                }
+
+                return new Dictionary<int, AnimalTrackerInfoDto?>();
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting animals with trackers for farm {FarmId}", farmId);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Asignación masiva: vincula trackers libres con animales sin tracker en orden numérico
+        /// </summary>
+        public async Task<BulkAssignResultDto> BulkAssignTrackersAsync(int farmId)
+        {
+            try
+            {
+                _logger.LogInformation("Bulk assign trackers for farm {FarmId}", farmId);
+                var response = await _httpService.PostAsync<BulkAssignResultDto>($"api/FarmTracker/bulk-assign/{farmId}", null);
+                return response ?? new BulkAssignResultDto { Message = "Error en la respuesta del servidor" };
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in bulk assign for farm {FarmId}", farmId);
+                throw;
+            }
+        }
+
+        /// <summary>
         /// Limpia trackers inactivos (sin transmisión en los últimos 2 minutos) de una granja
         /// </summary>
         public async Task<CleanupResponse> CleanupInactiveTrackersAsync(int farmId)
@@ -254,5 +300,53 @@ namespace TrackerGanadero.Shared.Services
         public string StatusText => IsOnline ? "En línea" : "Desconectado";
         public string LastSeenText => $"Visto: {LastSeen:dd/MM/yyyy HH:mm}";
         public string BatteryText => $"Batería: {BatteryLevel}%";
+    }
+
+    /// <summary>
+    /// DTO para animal con información de su tracker (optimizado para consultas masivas)
+    /// </summary>
+    public class AnimalWithTrackerDto
+    {
+        public int AnimalId { get; set; }
+        public string AnimalName { get; set; } = string.Empty;
+        public string? AnimalTag { get; set; }
+        public AnimalTrackerInfoDto? TrackerInfo { get; set; }
+    }
+
+    /// <summary>
+    /// Respuesta de la API para animales con trackers de una granja
+    /// </summary>
+    public class FarmAnimalsWithTrackersResponse
+    {
+        public bool success { get; set; }
+        public int farmId { get; set; }
+        public List<AnimalWithTrackerDto> animals { get; set; } = new();
+        public int count { get; set; }
+        public string message { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Resultado de asignación masiva de trackers
+    /// </summary>
+    public class BulkAssignResultDto
+    {
+        public bool Success { get; set; }
+        public int AssignedCount { get; set; }
+        public int TotalFreeTrackers { get; set; }
+        public int TotalAnimalsWithoutTracker { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public List<BulkAssignItemDto> Assignments { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Detalle de cada asignación individual en el bulk
+    /// </summary>
+    public class BulkAssignItemDto
+    {
+        public int AnimalId { get; set; }
+        public string AnimalName { get; set; } = string.Empty;
+        public string? AnimalTag { get; set; }
+        public int CustomerTrackerId { get; set; }
+        public string DeviceId { get; set; } = string.Empty;
     }
 }

@@ -22,7 +22,7 @@ namespace ApiWebTrackerGanado.Repositories
 
         public async Task<IEnumerable<Animal>> GetAllAsync()
         {
-            return await _context.Animals.ToListAsync();
+            return await _context.Animals.AsNoTracking().ToListAsync();
         }
 
         public async Task<Animal> AddAsync(Animal animal)
@@ -47,6 +47,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<Animal>> GetAnimalsByFarmAsync(int farmId)
         {
             return await _context.Animals
+                .AsNoTracking()
                 .Where(a => a.FarmId == farmId)
                 .Include(a => a.Tracker)
                 .ToListAsync();
@@ -55,6 +56,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<Animal>> GetAnimalsWithTrackersAsync(int farmId)
         {
             return await _context.Animals
+                .AsNoTracking()
                 .Where(a => a.FarmId == farmId && a.TrackerId != null)
                 .Include(a => a.Tracker)
                 .ToListAsync();
@@ -63,6 +65,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<Animal?> GetAnimalWithDetailsAsync(int id)
         {
             return await _context.Animals
+                .AsNoTracking()
                 .Where(a => a.Id == id)
                 .Include(a => a.Farm)
                 .Include(a => a.Tracker)
@@ -74,6 +77,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<Animal>> GetAnimalsInAreaAsync(Polygon area)
         {
             return await _context.Animals
+                .AsNoTracking()
                 .Where(a => a.TrackerId != null)
                 .Where(a => _context.LocationHistories
                     .Where(lh => lh.AnimalId == a.Id)
@@ -111,6 +115,7 @@ namespace ApiWebTrackerGanado.Repositories
         {
             var minAge = DateTime.UtcNow.AddMonths(-15);
             return await _context.Animals
+                .AsNoTracking()
                 .Where(a => a.FarmId == farmId &&
                            a.Gender.ToLower() == "female" &&
                            a.BirthDate <= minAge &&
@@ -121,6 +126,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<Animal>> GetAnimalsByStatusAsync(int farmId, string status)
         {
             return await _context.Animals
+                .AsNoTracking()
                 .Where(a => a.FarmId == farmId && a.Status == status)
                 .Include(a => a.Tracker)
                 .ToListAsync();
@@ -129,6 +135,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<decimal> GetAverageWeightByBreedAsync(int farmId, string breed)
         {
             var weights = await _context.Animals
+                .AsNoTracking()
                 .Where(a => a.FarmId == farmId && a.Breed == breed && a.Weight > 0)
                 .Select(a => a.Weight)
                 .ToListAsync();
@@ -149,6 +156,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<Animal?> GetByIdWithLocationAsync(int id)
         {
             return await _context.Animals
+                .AsNoTracking()
                 .Include(a => a.Farm)
                     .ThenInclude(f => f.BoundaryCoordinates)
                 .Include(a => a.LocationHistories.OrderByDescending(lh => lh.Timestamp).Take(1))

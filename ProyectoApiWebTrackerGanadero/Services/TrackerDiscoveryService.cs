@@ -29,8 +29,7 @@ namespace ApiWebTrackerGanado.Services
             try
             {
                 var availableTrackers = await _context.Trackers
-                    .Include(t => t.CustomerTrackers)
-                    .ThenInclude(ct => ct.Customer)
+                    .AsNoTracking()
                     .Where(t => t.IsActive && t.IsAvailableForAssignment)
                     .Where(t => !t.CustomerTrackers.Any(ct => ct.Status == "Active"))
                     .Select(t => new TrackerDiscoveryDto
@@ -64,9 +63,8 @@ namespace ApiWebTrackerGanado.Services
             try
             {
                 var customerTrackers = await _context.CustomerTrackers
+                    .AsNoTracking()
                     .Include(ct => ct.Tracker)
-                    // .Include(ct => ct.License) // Comentado porque la propiedad no existe
-                    // .Include(ct => ct.AssignedByUser) // Comentado porque la propiedad no existe
                     .Where(ct => ct.CustomerId == customerId && ct.Status == "Active")
                     .Select(ct => new CustomerTrackerDto
                     {
@@ -239,39 +237,47 @@ namespace ApiWebTrackerGanado.Services
         {
             try
             {
-                _logger.LogInformation("Starting GetActiveTransmittingTrackersAsync...");
-
                 var cutoffTime = DateTime.UtcNow.AddMinutes(-30);
-                _logger.LogInformation($"Looking for GPS data newer than: {cutoffTime}");
 
                 // Obtener DeviceIds que han transmitido recientemente
                 var recentDeviceIds = await _context.LocationHistories
+                    .AsNoTracking()
                     .Where(lh => lh.Timestamp > cutoffTime)
                     .Where(lh => !string.IsNullOrEmpty(lh.DeviceId))
                     .Select(lh => lh.DeviceId!)
                     .Distinct()
                     .ToListAsync();
 
-                _logger.LogInformation($"Found {recentDeviceIds.Count} recent device IDs: {string.Join(", ", recentDeviceIds)}");
+                if (!recentDeviceIds.Any())
+                    return new List<TrackerDiscoveryDto>();
 
-                // Para detección, crear DTOs para TODOS los device IDs activos, registrados o no
+                // Batch: cargar todos los trackers y last locations de una vez (evitar N+1)
+                var allTrackers = await _context.Trackers
+                    .AsNoTracking()
+                    .Where(t => recentDeviceIds.Contains(t.DeviceId))
+                    .ToDictionaryAsync(t => t.DeviceId!, t => t);
+
+                var lastLocations = await _context.LocationHistories
+                    .AsNoTracking()
+                    .Where(lh => recentDeviceIds.Contains(lh.DeviceId!))
+                    .GroupBy(lh => lh.DeviceId)
+                    .Select(g => new
+                    {
+                        DeviceId = g.Key,
+                        LastTimestamp = g.Max(lh => lh.Timestamp)
+                    })
+                    .ToDictionaryAsync(x => x.DeviceId!, x => x.LastTimestamp);
+
                 var activeTrackers = new List<TrackerDiscoveryDto>();
+                var onlineCutoff = DateTime.UtcNow.AddMinutes(-10);
 
                 foreach (var deviceId in recentDeviceIds)
                 {
-                    // Buscar si ya está registrado
-                    var existingTracker = await _context.Trackers
-                        .FirstOrDefaultAsync(t => t.DeviceId == deviceId);
-
-                    // Obtener la última ubicación para determinar si está online
-                    var lastLocation = await _context.LocationHistories
-                        .Where(lh => lh.DeviceId == deviceId)
-                        .OrderByDescending(lh => lh.Timestamp)
-                        .FirstOrDefaultAsync();
+                    allTrackers.TryGetValue(deviceId, out var existingTracker);
+                    lastLocations.TryGetValue(deviceId, out var lastTimestamp);
 
                     if (existingTracker != null)
                     {
-                        // Tracker ya registrado
                         activeTrackers.Add(new TrackerDiscoveryDto
                         {
                             Id = existingTracker.Id,
@@ -282,28 +288,27 @@ namespace ApiWebTrackerGanado.Services
                             SerialNumber = existingTracker.SerialNumber,
                             Status = existingTracker.Status,
                             BatteryLevel = existingTracker.BatteryLevel,
-                            LastSeen = lastLocation?.Timestamp ?? existingTracker.LastSeen,
-                            IsOnline = lastLocation != null && lastLocation.Timestamp > DateTime.UtcNow.AddMinutes(-10)
+                            LastSeen = lastTimestamp != default ? lastTimestamp : existingTracker.LastSeen,
+                            IsOnline = lastTimestamp > onlineCutoff
                         });
                     }
                     else
                     {
-                        // Tracker detectado pero no registrado
                         activeTrackers.Add(new TrackerDiscoveryDto
                         {
-                            Id = 0, // Indicates not registered
+                            Id = 0,
                             DeviceId = deviceId,
                             Name = $"Tracker {deviceId}",
                             Model = "Unknown",
                             Status = "Detected",
                             BatteryLevel = 100,
-                            LastSeen = lastLocation?.Timestamp ?? DateTime.UtcNow,
-                            IsOnline = lastLocation != null && lastLocation.Timestamp > DateTime.UtcNow.AddMinutes(-10)
+                            LastSeen = lastTimestamp != default ? lastTimestamp : DateTime.UtcNow,
+                            IsOnline = lastTimestamp > onlineCutoff
                         });
                     }
                 }
 
-                _logger.LogInformation($"Found {activeTrackers.Count} active transmitting trackers");
+                _logger.LogInformation("Found {Count} active transmitting trackers", activeTrackers.Count);
                 return activeTrackers.OrderBy(t => t.DeviceId).ToList();
             }
             catch (Exception ex)
@@ -320,54 +325,58 @@ namespace ApiWebTrackerGanado.Services
         {
             try
             {
-                _logger.LogInformation("[GetAvailableUnassignedTrackersAsync] Starting...");
-
                 var cutoffTime = DateTime.UtcNow.AddMinutes(-30);
-                _logger.LogInformation($"[GetAvailableUnassignedTrackersAsync] Looking for GPS data newer than: {cutoffTime}");
 
                 // Obtener DeviceIds que han transmitido recientemente
                 var recentDeviceIds = await _context.LocationHistories
+                    .AsNoTracking()
                     .Where(lh => lh.Timestamp > cutoffTime)
                     .Where(lh => !string.IsNullOrEmpty(lh.DeviceId))
                     .Select(lh => lh.DeviceId!)
                     .Distinct()
                     .ToListAsync();
 
-                _logger.LogInformation($"[GetAvailableUnassignedTrackersAsync] Found {recentDeviceIds.Count} recent device IDs: {string.Join(", ", recentDeviceIds)}");
+                if (!recentDeviceIds.Any())
+                    return new List<TrackerDiscoveryDto>();
 
                 // Obtener IDs de trackers ya asignados a clientes (con status Active)
                 var assignedTrackerIds = await _context.CustomerTrackers
+                    .AsNoTracking()
                     .Where(ct => ct.Status == "Active")
                     .Select(ct => ct.TrackerId)
                     .Distinct()
                     .ToListAsync();
 
-                _logger.LogInformation($"[GetAvailableUnassignedTrackersAsync] Found {assignedTrackerIds.Count} already assigned tracker IDs");
+                // Batch: cargar todos los trackers y last locations de una vez
+                var allTrackers = await _context.Trackers
+                    .AsNoTracking()
+                    .Where(t => recentDeviceIds.Contains(t.DeviceId))
+                    .ToDictionaryAsync(t => t.DeviceId!, t => t);
+
+                var lastLocations = await _context.LocationHistories
+                    .AsNoTracking()
+                    .Where(lh => recentDeviceIds.Contains(lh.DeviceId!))
+                    .GroupBy(lh => lh.DeviceId)
+                    .Select(g => new
+                    {
+                        DeviceId = g.Key,
+                        LastTimestamp = g.Max(lh => lh.Timestamp)
+                    })
+                    .ToDictionaryAsync(x => x.DeviceId!, x => x.LastTimestamp);
 
                 var availableTrackers = new List<TrackerDiscoveryDto>();
+                var onlineCutoff = DateTime.UtcNow.AddMinutes(-10);
 
                 foreach (var deviceId in recentDeviceIds)
                 {
-                    // Buscar si ya está registrado
-                    var existingTracker = await _context.Trackers
-                        .FirstOrDefaultAsync(t => t.DeviceId == deviceId);
-
-                    // Obtener la última ubicación para determinar si está online
-                    var lastLocation = await _context.LocationHistories
-                        .Where(lh => lh.DeviceId == deviceId)
-                        .OrderByDescending(lh => lh.Timestamp)
-                        .FirstOrDefaultAsync();
+                    allTrackers.TryGetValue(deviceId, out var existingTracker);
+                    lastLocations.TryGetValue(deviceId, out var lastTimestamp);
 
                     if (existingTracker != null)
                     {
-                        // SECURITY CHECK: Verificar que NO esté asignado a ningún cliente
                         if (assignedTrackerIds.Contains(existingTracker.Id))
-                        {
-                            _logger.LogInformation($"[GetAvailableUnassignedTrackersAsync] Tracker {deviceId} is already assigned, skipping");
-                            continue; // Skip trackers asignados
-                        }
+                            continue; // Skip assigned trackers
 
-                        // Tracker registrado y DISPONIBLE
                         availableTrackers.Add(new TrackerDiscoveryDto
                         {
                             Id = existingTracker.Id,
@@ -378,33 +387,32 @@ namespace ApiWebTrackerGanado.Services
                             SerialNumber = existingTracker.SerialNumber,
                             Status = "Available",
                             BatteryLevel = existingTracker.BatteryLevel,
-                            LastSeen = lastLocation?.Timestamp ?? existingTracker.LastSeen,
-                            IsOnline = lastLocation != null && lastLocation.Timestamp > DateTime.UtcNow.AddMinutes(-10)
+                            LastSeen = lastTimestamp != default ? lastTimestamp : existingTracker.LastSeen,
+                            IsOnline = lastTimestamp > onlineCutoff
                         });
                     }
                     else
                     {
-                        // Tracker detectado pero no registrado (siempre disponible)
                         availableTrackers.Add(new TrackerDiscoveryDto
                         {
-                            Id = 0, // Indicates not registered
+                            Id = 0,
                             DeviceId = deviceId,
                             Name = $"Tracker {deviceId}",
                             Model = "Unknown",
                             Status = "Detected",
                             BatteryLevel = 100,
-                            LastSeen = lastLocation?.Timestamp ?? DateTime.UtcNow,
-                            IsOnline = lastLocation != null && lastLocation.Timestamp > DateTime.UtcNow.AddMinutes(-10)
+                            LastSeen = lastTimestamp != default ? lastTimestamp : DateTime.UtcNow,
+                            IsOnline = lastTimestamp > onlineCutoff
                         });
                     }
                 }
 
-                _logger.LogInformation($"[GetAvailableUnassignedTrackersAsync] Found {availableTrackers.Count} available (unassigned) trackers");
+                _logger.LogInformation("Found {Count} available (unassigned) trackers", availableTrackers.Count);
                 return availableTrackers.OrderBy(t => t.DeviceId).ToList();
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "[GetAvailableUnassignedTrackersAsync] Error getting available unassigned trackers");
+                _logger.LogError(ex, "Error getting available unassigned trackers");
                 throw;
             }
         }
@@ -416,60 +424,57 @@ namespace ApiWebTrackerGanado.Services
         {
             try
             {
-                _logger.LogInformation("Starting DetectNewTrackersAsync...");
-
-                // Obtener device IDs únicos de los últimos registros de ubicación (últimos 30 minutos)
                 var cutoffTime = DateTime.UtcNow.AddMinutes(-30);
-                _logger.LogInformation($"Looking for GPS data newer than: {cutoffTime} (discovery scan window)");
 
                 var recentDeviceIds = await _context.LocationHistories
+                    .AsNoTracking()
                     .Where(lh => lh.Timestamp > cutoffTime)
                     .Where(lh => !string.IsNullOrEmpty(lh.DeviceId))
                     .Select(lh => lh.DeviceId!)
                     .Distinct()
                     .ToListAsync();
 
-                _logger.LogInformation($"Found {recentDeviceIds.Count} recent device IDs: {string.Join(", ", recentDeviceIds)}");
-
                 // Encontrar device IDs que no están registrados como trackers
                 var existingDeviceIds = await _context.Trackers
+                    .AsNoTracking()
                     .Select(t => t.DeviceId)
                     .ToListAsync();
-
-                _logger.LogInformation($"Found {existingDeviceIds.Count} existing tracker device IDs: {string.Join(", ", existingDeviceIds)}");
 
                 var newDeviceIds = recentDeviceIds
                     .Where(did => !existingDeviceIds.Contains(did))
                     .ToList();
 
-                _logger.LogInformation($"Found {newDeviceIds.Count} NEW device IDs: {string.Join(", ", newDeviceIds)}");
+                if (!newDeviceIds.Any())
+                    return new List<TrackerDiscoveryDto>();
 
-                var newTrackers = new List<TrackerDiscoveryDto>();
-
-                foreach (var deviceId in newDeviceIds)
-                {
-                    // Obtener la última ubicación para extraer información del dispositivo
-                    var latestLocation = await _context.LocationHistories
-                        .Where(lh => lh.DeviceId == deviceId)
-                        .OrderByDescending(lh => lh.Timestamp)
-                        .FirstOrDefaultAsync();
-
-                    if (latestLocation != null)
+                // Batch: obtener todas las últimas ubicaciones de una vez (evitar N+1)
+                var lastLocations = await _context.LocationHistories
+                    .AsNoTracking()
+                    .Where(lh => newDeviceIds.Contains(lh.DeviceId!))
+                    .GroupBy(lh => lh.DeviceId)
+                    .Select(g => new
                     {
-                        newTrackers.Add(new TrackerDiscoveryDto
-                        {
-                            DeviceId = deviceId,
-                            Name = $"Tracker {deviceId}",
-                            Model = "Unknown",
-                            LastSeen = latestLocation.Timestamp,
-                            IsOnline = latestLocation.Timestamp > DateTime.UtcNow.AddMinutes(-10),
-                            Status = "Detected",
-                            BatteryLevel = 100 // Default value
-                        });
-                    }
-                }
+                        DeviceId = g.Key,
+                        LastTimestamp = g.Max(lh => lh.Timestamp)
+                    })
+                    .ToDictionaryAsync(x => x.DeviceId!, x => x.LastTimestamp);
 
-                _logger.LogInformation($"Detected {newTrackers.Count} new trackers");
+                var onlineCutoff = DateTime.UtcNow.AddMinutes(-10);
+                var newTrackers = newDeviceIds
+                    .Where(deviceId => lastLocations.ContainsKey(deviceId))
+                    .Select(deviceId => new TrackerDiscoveryDto
+                    {
+                        DeviceId = deviceId,
+                        Name = $"Tracker {deviceId}",
+                        Model = "Unknown",
+                        LastSeen = lastLocations[deviceId],
+                        IsOnline = lastLocations[deviceId] > onlineCutoff,
+                        Status = "Detected",
+                        BatteryLevel = 100
+                    })
+                    .ToList();
+
+                _logger.LogInformation("Detected {Count} new trackers", newTrackers.Count);
                 return newTrackers;
             }
             catch (Exception ex)

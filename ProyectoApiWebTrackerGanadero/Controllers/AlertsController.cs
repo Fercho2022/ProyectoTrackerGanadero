@@ -31,11 +31,19 @@ namespace ApiWebTrackerGanado.Controllers
                 // SECURITY FIX: Filter alerts by current user's farms
                 var userId = GetCurrentUserId();
 
-                // Get all alerts that belong to the user's farms
-                var alerts = await _context.Alerts
+                // Build query with all filters pushed to DB
+                var query = _context.Alerts
+                    .AsNoTracking()
                     .Include(a => a.Animal)
                         .ThenInclude(an => an.Farm)
-                    .Where(a => a.Animal.Farm.UserId == userId)
+                    .Where(a => a.Animal.Farm.UserId == userId);
+
+                // Push isResolved filter to DB instead of filtering in-memory
+                if (isResolved.HasValue)
+                    query = query.Where(a => a.IsResolved == isResolved.Value);
+
+                var alerts = await query
+                    .OrderByDescending(a => a.CreatedAt)
                     .ToListAsync();
 
                 var alertDtos = alerts.Select(a => new AlertDto
@@ -55,10 +63,7 @@ namespace ApiWebTrackerGanado.Controllers
                     ResolvedAt = a.ResolvedAt
                 });
 
-                if (isResolved.HasValue)
-                    alertDtos = alertDtos.Where(a => a.IsResolved == isResolved.Value);
-
-                return Ok(alertDtos.OrderByDescending(a => a.CreatedAt));
+                return Ok(alertDtos);
             }
             catch (UnauthorizedAccessException ex)
             {
@@ -292,6 +297,7 @@ namespace ApiWebTrackerGanado.Controllers
         private async Task<int> GetCustomerIdByUserIdAsync(int userId)
         {
             var customer = await _context.Customers
+                .AsNoTracking()
                 .FirstOrDefaultAsync(c => c.UserId == userId);
 
             if (customer == null)
@@ -306,6 +312,7 @@ namespace ApiWebTrackerGanado.Controllers
         private async Task<bool> VerifyFarmOwnershipAsync(int farmId, int userId)
         {
             var farm = await _context.Farms
+                .AsNoTracking()
                 .FirstOrDefaultAsync(f => f.Id == farmId && f.UserId == userId);
 
             return farm != null;
@@ -315,6 +322,7 @@ namespace ApiWebTrackerGanado.Controllers
         private async Task<bool> VerifyAnimalOwnershipAsync(int animalId, int userId)
         {
             var animal = await _context.Animals
+                .AsNoTracking()
                 .Include(a => a.Farm)
                 .FirstOrDefaultAsync(a => a.Id == animalId && a.Farm.UserId == userId);
 
@@ -325,6 +333,7 @@ namespace ApiWebTrackerGanado.Controllers
         private async Task<bool> VerifyAlertOwnershipAsync(int alertId, int userId)
         {
             var alert = await _context.Alerts
+                .AsNoTracking()
                 .Include(a => a.Animal)
                     .ThenInclude(an => an.Farm)
                 .FirstOrDefaultAsync(a => a.Id == alertId && a.Animal.Farm.UserId == userId);

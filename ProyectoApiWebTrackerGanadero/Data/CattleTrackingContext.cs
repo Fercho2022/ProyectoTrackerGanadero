@@ -109,6 +109,10 @@ namespace ApiWebTrackerGanado.Data
                 // Temporarily disabled for PostGIS migration
                 // entity.Property(e => e.Location).HasColumnType("geometry");
                 entity.HasIndex(e => e.Timestamp);
+                // CRITICAL: Composite index for map queries (GROUP BY AnimalId ORDER BY Timestamp DESC)
+                entity.HasIndex(e => new { e.AnimalId, e.Timestamp });
+                // Index for tracker-based queries
+                entity.HasIndex(e => new { e.TrackerId, e.Timestamp });
             });
 
             // Pasture Configuration

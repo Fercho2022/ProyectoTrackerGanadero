@@ -121,11 +121,15 @@ namespace ApiWebTrackerGanado.Models
         /// </summary>
         public static string GenerateLicenseKey()
         {
+            // Use Random.Shared for better performance and to avoid issues with creating new Random() instances in quick succession.
             var year = DateTime.UtcNow.Year;
             var random = new Random();
             var part1 = random.Next(1000, 9999);
             var part2 = random.Next(1000, 9999);
             var part3 = random.Next(1000, 9999);
+            //var part1 = Random.Shared.Next(1000, 9999);
+            //var part2 = Random.Shared.Next(1000, 9999);
+            //var part3 = Random.Shared.Next(1000, 9999);
 
             return $"TG-{year}-{part1}-{part2}-{part3}";
         }

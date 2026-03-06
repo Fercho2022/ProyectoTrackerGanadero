@@ -11,7 +11,7 @@ using ApiWebTrackerGanado.Helpers;
 
 namespace ApiWebTrackerGanado.Services
 {
-    public class TrackingService : ITrackingService 
+    public class TrackingService : ITrackingService
     {
         private readonly ITrackerRepository _trackerRepository;
         private readonly ILocationHistoryRepository _locationHistoryRepository;
@@ -19,6 +19,10 @@ namespace ApiWebTrackerGanado.Services
         private readonly IHubContext<LiveTrackingHub> _hubContext;
         private readonly IAlertService _alertService;
         private readonly CattleTrackingContext _context;
+
+        // Throttle: only check alerts every 60 seconds per tracker to reduce DB load
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, DateTime> _lastAlertCheck = new();
+        private static readonly TimeSpan AlertCheckInterval = TimeSpan.FromSeconds(60);
 
         public TrackingService(
             ITrackerRepository trackerRepository,
@@ -38,86 +42,51 @@ namespace ApiWebTrackerGanado.Services
 
         public async Task ProcessTrackerDataAsync(TrackerDataDto trackerData)
         {
-            // 1. Find or Create Tracker
+            // 1. Find or Create Tracker - single query with needed includes
             var tracker = await _context.Trackers
-                .Include(t => t.CustomerTrackers.Where(ct => ct.Status == "Active")) // Include active CustomerTrackers
-                .ThenInclude(ct => ct.Customer)
-                .Include(t => t.Animal) // Include assigned Animal directly to the tracker
+                .Include(t => t.CustomerTrackers.Where(ct => ct.Status == "Active"))
                 .FirstOrDefaultAsync(t => t.DeviceId == trackerData.DeviceId);
 
             if (tracker == null)
             {
-                // Tracker nuevo detectado - crearlo como "Discovered" esperando registro del usuario
+                // Tracker nuevo - crear como "Discovered"
                 tracker = new Tracker
                 {
                     DeviceId = trackerData.DeviceId,
                     Name = $"Tracker {trackerData.DeviceId}",
                     Model = "Unknown",
-                    Status = "Discovered", // Esperando registro manual
-                    IsAvailableForAssignment = true, // Disponible para que cualquier usuario lo registre
+                    Status = "Discovered",
+                    IsAvailableForAssignment = true,
                     IsOnline = true,
                     BatteryLevel = trackerData.BatteryLevel,
                     LastSeen = trackerData.Timestamp.ToUniversalTime(),
                     CreatedAt = DateTime.UtcNow
                 };
-
-                // NO crear CustomerTracker aquí - el usuario lo registra desde la app
-                // NO guardar LocationHistory para trackers "Discovered"
-
                 _context.Trackers.Add(tracker);
                 await _context.SaveChangesAsync();
-
-                // Salir aquí - no procesar LocationHistory ni alertas para trackers sin registrar
                 return;
             }
-            else
+
+            // Update tracker state (tracked by EF, saved later in single batch)
+            tracker.BatteryLevel = trackerData.BatteryLevel;
+            tracker.LastSeen = trackerData.Timestamp.ToUniversalTime();
+            tracker.IsOnline = true;
+
+            if (tracker.Status == "Discovered")
             {
-                // Tracker existe - actualizar estado
-                tracker.BatteryLevel = trackerData.BatteryLevel;
-                tracker.LastSeen = trackerData.Timestamp.ToUniversalTime();
-                tracker.IsOnline = true;
                 await _context.SaveChangesAsync();
-
-                // Si el tracker está "Discovered" (sin registrar), no procesar más
-                if (tracker.Status == "Discovered")
-                {
-                    return;
-                }
-
-                // Si el tracker está "Active", continuar con LocationHistory y alertas
-                // El código siguiente solo se ejecuta para trackers registrados
+                return;
             }
 
-            var activeCustomerTracker = tracker.CustomerTrackers.FirstOrDefault(ct => ct.Status == "Active");
-            Animal? assignedAnimal = null;
-
-            if (activeCustomerTracker != null)
-            {
-                // If there's an active CustomerTracker, try to get the animal assigned to it
-                // Note: Animal is directly linked to CustomerTracker (AssignedAnimal) AND Tracker (Animal navigation property)
-                // We should prioritize the Animal linked via CustomerTracker if it exists, otherwise use the one directly linked to Tracker.
-                assignedAnimal = await _context.Animals
-                    .Include(a => a.Farm)
-                    .FirstOrDefaultAsync(a => a.CustomerTrackerId == activeCustomerTracker.Id);
-                
-                if (assignedAnimal == null && tracker.Animal != null)
-                {
-                     // Fallback: If no animal linked via CustomerTracker, but tracker is directly linked to an animal
-                    assignedAnimal = await _context.Animals
-                        .Include(a => a.Farm)
-                        .FirstOrDefaultAsync(a => a.Id == tracker.Animal.Id);
-                }
-            }
-            else if (tracker.Animal != null)
-            {
-                // No active CustomerTracker, but tracker is directly linked to an animal
-                assignedAnimal = await _context.Animals
-                    .Include(a => a.Farm)
-                    .FirstOrDefaultAsync(a => a.Id == tracker.Animal.Id);
-            }
+            // 2. Find assigned animal in a single, more reliable query
+            var assignedAnimal = await _context.CustomerTrackers
+                .Where(ct => ct.Tracker.DeviceId == trackerData.DeviceId && ct.Status == "Active")
+                .Select(ct => ct.AssignedAnimal)
+                .Include(animal => animal.Farm)
+                .FirstOrDefaultAsync();
 
 
-            // Create the entry in the location history
+            // 3. Create LocationHistory entry (add to context without saving yet)
             var locationHistory = new LocationHistory
             {
                 TrackerId = tracker.Id,
@@ -129,25 +98,34 @@ namespace ApiWebTrackerGanado.Services
                 ActivityLevel = trackerData.ActivityLevel,
                 Temperature = trackerData.Temperature,
                 SignalStrength = trackerData.SignalStrength,
-                Timestamp = trackerData.Timestamp.ToUniversalTime()
+                Timestamp = trackerData.Timestamp.ToUniversalTime(),
+                AnimalId = assignedAnimal?.Id
             };
 
-            // Link to Animal if one is assigned
+            _context.LocationHistories.Add(locationHistory);
+
+            // 4. SINGLE SaveChangesAsync for tracker update + location history insert
+            await _context.SaveChangesAsync();
+
+            // 5. Alerts: throttle to once per 60 seconds per tracker to reduce DB load
             if (assignedAnimal != null)
             {
-                locationHistory.AnimalId = assignedAnimal.Id;
-            }
+                var now = DateTime.UtcNow;
+                var shouldCheckAlerts = _lastAlertCheck.AddOrUpdate(
+                    trackerData.DeviceId,
+                    now, // first time: always check
+                    (key, lastCheck) => (now - lastCheck) >= AlertCheckInterval ? now : lastCheck
+                ) == now;
 
-            await _locationHistoryRepository.AddAsync(locationHistory);
+                if (shouldCheckAlerts)
+                {
+                    await _alertService.CheckLocationAlertsAsync(assignedAnimal, locationHistory);
+                    await _alertService.CheckActivityAlertsAsync(assignedAnimal, trackerData.ActivityLevel);
+                    await _alertService.CheckSecurityAlertsAsync(assignedAnimal, locationHistory);
+                    await _alertService.CheckTrackerHealthAlertsAsync(assignedAnimal, locationHistory, tracker);
+                }
 
-            // Conditional logic for alerts and SignalR updates
-            if (assignedAnimal != null)
-            {
-                await _alertService.CheckLocationAlertsAsync(assignedAnimal, locationHistory);
-                await _alertService.CheckActivityAlertsAsync(assignedAnimal, trackerData.ActivityLevel);
-                await _alertService.CheckSecurityAlertsAsync(assignedAnimal, locationHistory);
-                await _alertService.CheckTrackerHealthAlertsAsync(assignedAnimal, locationHistory, tracker);
-
+                // SignalR broadcast (always, these are cheap)
                 var locationDto = new LocationDto
                 {
                     Latitude = trackerData.Latitude,
@@ -165,28 +143,6 @@ namespace ApiWebTrackerGanado.Services
 
                 await _hubContext.Clients.Group($"farm_{assignedAnimal.FarmId}")
                     .SendAsync("AnimalLocationUpdate", assignedAnimal.Id, locationDto);
-            }
-            else
-            {
-                // If no animal is assigned but tracker belongs to a customer, we could send a generic customer-level update
-                if (activeCustomerTracker != null && activeCustomerTracker.Customer != null)
-                {
-                    var locationDto = new LocationDto
-                    {
-                        Latitude = trackerData.Latitude,
-                        Longitude = trackerData.Longitude,
-                        Altitude = trackerData.Altitude,
-                        Speed = trackerData.Speed,
-                        ActivityLevel = trackerData.ActivityLevel,
-                        Temperature = trackerData.Temperature,
-                        Timestamp = trackerData.Timestamp,
-                        HasSignal = true
-                    };
-                    // Example: send update to a customer-specific group
-                    await _hubContext.Clients.Group($"customer_{activeCustomerTracker.Customer.Id}")
-                        .SendAsync("UnassignedTrackerLocationUpdate", tracker.Id, locationDto);
-                }
-                // No animal and no customer assignment, just save history for discovery.
             }
         }
 
@@ -306,17 +262,57 @@ namespace ApiWebTrackerGanado.Services
                 throw new ArgumentException($"Farm with ID {farmId} not found or does not belong to customer {customerId}.");
             }
 
-            // If farm is valid, get the animals and their locations
+            // OPTIMIZADO: Cargar animales con trackers en una sola query
             var animals = await _context.Animals
                 .Include(a => a.Tracker)
                 .Where(a => a.FarmId == farmId)
                 .ToListAsync();
 
+            // OPTIMIZADO: Obtener última ubicación de TODOS los animales de la granja en UNA sola query
+            var animalIds = animals.Select(a => a.Id).ToList();
+            var lastLocations = await _context.LocationHistories
+                .Where(lh => lh.AnimalId.HasValue && animalIds.Contains(lh.AnimalId.Value))
+                .GroupBy(lh => lh.AnimalId)
+                .Select(g => new
+                {
+                    AnimalId = g.Key,
+                    Location = g.OrderByDescending(lh => lh.Timestamp).FirstOrDefault()
+                })
+                .ToDictionaryAsync(x => x.AnimalId!.Value, x => x.Location);
+
             var result = new List<object>();
 
             foreach (var animal in animals)
             {
-                var currentLocation = await GetAnimalCurrentLocationAsync(animal.Id);
+                LocationDto? locationDto = null;
+                var tracker = animal.Tracker;
+                var isOnline = tracker?.IsOnline ?? false;
+
+                if (isOnline && lastLocations.TryGetValue(animal.Id, out var lastLoc) && lastLoc != null)
+                {
+                    locationDto = new LocationDto
+                    {
+                        Latitude = lastLoc.Latitude,
+                        Longitude = lastLoc.Longitude,
+                        Altitude = lastLoc.Altitude,
+                        Speed = lastLoc.Speed,
+                        ActivityLevel = lastLoc.ActivityLevel,
+                        Temperature = lastLoc.Temperature,
+                        Timestamp = lastLoc.Timestamp,
+                        HasSignal = true
+                    };
+                }
+                else if (tracker != null)
+                {
+                    locationDto = new LocationDto
+                    {
+                        Latitude = 0.0, Longitude = 0.0, Altitude = 0.0,
+                        Speed = 0.0, ActivityLevel = 0, Temperature = 0.0,
+                        Timestamp = tracker.LastSeen,
+                        HasSignal = false
+                    };
+                }
+
                 result.Add(new
                 {
                     Id = animal.Id,
@@ -325,8 +321,8 @@ namespace ApiWebTrackerGanado.Services
                     Status = animal.Status,
                     FarmId = animal.FarmId,
                     TrackerId = animal.TrackerId,
-                    CurrentLocation = currentLocation,
-                    HasSignal = currentLocation?.HasSignal ?? false
+                    CurrentLocation = locationDto,
+                    HasSignal = locationDto?.HasSignal ?? false
                 });
             }
 
@@ -335,21 +331,58 @@ namespace ApiWebTrackerGanado.Services
 
         public async Task<IEnumerable<object>> GetAllAnimalsLocationsAsync(int customerId)
         {
-            // Get all animals associated with the customer via an active CustomerTracker
+            // OPTIMIZADO: Cargar todos los animales del customer con tracker en una sola query
             var animals = await _context.Animals
                 .Include(a => a.Tracker)
-                .Include(a => a.CustomerTracker)
-                    .ThenInclude(ct => ct.Customer) // Ensure Customer is loaded if needed later
                 .Where(a => a.CustomerTracker != null &&
                             a.CustomerTracker.CustomerId == customerId &&
                             a.CustomerTracker.Status == "Active")
                 .ToListAsync();
 
+            // OPTIMIZADO: Obtener última ubicación de TODOS los animales en UNA sola query
+            var animalIds = animals.Select(a => a.Id).ToList();
+            var lastLocations = await _context.LocationHistories
+                .Where(lh => lh.AnimalId.HasValue && animalIds.Contains(lh.AnimalId.Value))
+                .GroupBy(lh => lh.AnimalId)
+                .Select(g => new
+                {
+                    AnimalId = g.Key,
+                    Location = g.OrderByDescending(lh => lh.Timestamp).FirstOrDefault()
+                })
+                .ToDictionaryAsync(x => x.AnimalId!.Value, x => x.Location);
+
             var result = new List<object>();
 
             foreach (var animal in animals)
             {
-                var currentLocation = await GetAnimalCurrentLocationAsync(animal.Id);
+                LocationDto? locationDto = null;
+                var tracker = animal.Tracker;
+                var isOnline = tracker?.IsOnline ?? false;
+
+                if (isOnline && lastLocations.TryGetValue(animal.Id, out var lastLoc) && lastLoc != null)
+                {
+                    locationDto = new LocationDto
+                    {
+                        Latitude = lastLoc.Latitude,
+                        Longitude = lastLoc.Longitude,
+                        Altitude = lastLoc.Altitude,
+                        Speed = lastLoc.Speed,
+                        ActivityLevel = lastLoc.ActivityLevel,
+                        Temperature = lastLoc.Temperature,
+                        Timestamp = lastLoc.Timestamp,
+                        HasSignal = true
+                    };
+                }
+                else if (tracker != null)
+                {
+                    locationDto = new LocationDto
+                    {
+                        Latitude = 0.0, Longitude = 0.0, Altitude = 0.0,
+                        Speed = 0.0, ActivityLevel = 0, Temperature = 0.0,
+                        Timestamp = tracker.LastSeen,
+                        HasSignal = false
+                    };
+                }
 
                 result.Add(new
                 {
@@ -359,8 +392,8 @@ namespace ApiWebTrackerGanado.Services
                     Status = animal.Status,
                     FarmId = animal.FarmId,
                     TrackerId = animal.TrackerId,
-                    CurrentLocation = currentLocation,
-                    HasSignal = currentLocation?.HasSignal ?? false // Explicitly include HasSignal
+                    CurrentLocation = locationDto,
+                    HasSignal = locationDto?.HasSignal ?? false
                 });
             }
 

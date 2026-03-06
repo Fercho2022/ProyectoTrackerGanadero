@@ -8,6 +8,7 @@
 @inject SettingsStateService StateService
 @inject FarmService FarmService
 @inject AuthService AuthService
+@inject FarmTrackerService FarmTrackerService
 @inject IJSRuntime JSRuntime
 @implements IDisposable
 
@@ -270,16 +271,19 @@
                                                     <td>@(string.IsNullOrEmpty(tracker.AnimalName) ? "N/A" : tracker.AnimalName)</td>
                                                     <td>@tracker.AssignedAt.ToString("dd/MM/yyyy")</td>
                                                     <td>
-                                                        <div class="btn-group btn-group-sm">
-                                                            <button class="btn btn-outline-primary btn-sm">
-                                                                <i class="fas fa-map-marker-alt me-1"></i>
-                                                                Ver en Mapa
-                                                            </button>
-                                                            <button class="btn btn-outline-danger btn-sm">
-                                                                <i class="fas fa-unlink me-1"></i>
-                                                                Desasignar
-                                                            </button>
-                                                        </div>
+                                                        <button class="btn btn-outline-danger btn-sm"
+                                                                @onclick="() => ConfirmDeleteTracker(tracker)"
+                                                                disabled="@(_deletingTrackerId == tracker.TrackerId)">
+                                                            @if (_deletingTrackerId == tracker.TrackerId)
+                                                            {
+                                                                <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                                                            }
+                                                            else
+                                                            {
+                                                                <i class="fas fa-trash-alt me-1"></i>
+                                                            }
+                                                            Eliminar
+                                                        </button>
                                                     </td>
                                                 </tr>
                                             }
@@ -493,6 +497,51 @@
             }
         </div>
     </div>
+
+    @* Modal de confirmacion de eliminacion de tracker *@
+    @if (_showDeleteModal && _trackerToDelete != null)
+    {
+        <div class="modal fade show d-block" tabindex="-1" style="background-color: rgba(0,0,0,0.5);">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header bg-danger text-white">
+                        <h5 class="modal-title">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            Eliminar Tracker
+                        </h5>
+                        <button type="button" class="btn-close btn-close-white" @onclick="CancelDeleteTracker"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p>Va a eliminar el siguiente tracker:</p>
+                        <div class="card bg-light mb-3">
+                            <div class="card-body py-2">
+                                <strong>@_trackerToDelete.TrackerName</strong><br />
+                                <small class="text-muted">Device ID: @_trackerToDelete.DeviceId</small>
+                                @if (!string.IsNullOrEmpty(_trackerToDelete.AnimalName))
+                                {
+                                    <br /><small class="text-warning">
+                                        <i class="fas fa-exclamation-circle me-1"></i>
+                                        Asignado al animal: @_trackerToDelete.AnimalName
+                                    </small>
+                                }
+                            </div>
+                        </div>
+                        <p class="text-danger mb-0">
+                            <i class="fas fa-warning me-1"></i>
+                            Esta accion no se puede deshacer.
+                        </p>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" @onclick="CancelDeleteTracker">Cancelar</button>
+                        <button type="button" class="btn btn-danger" @onclick="ExecuteDeleteTracker">
+                            <i class="fas fa-trash-alt me-1"></i>
+                            Eliminar
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
 </div>
 
 @code {
@@ -508,6 +557,11 @@
     // Tracker Management
     private string? _trackerMessage;
     private bool _trackerSuccess = false;
+
+    // Delete Tracker
+    private bool _showDeleteModal = false;
+    private CustomerTrackerDto? _trackerToDelete;
+    private int _deletingTrackerId = -1;
 
 
     // Farm Management for Tracker Assignment
@@ -753,6 +807,55 @@
         StateHasChanged();
     }
 
+    private void ConfirmDeleteTracker(CustomerTrackerDto tracker)
+    {
+        _trackerToDelete = tracker;
+        _showDeleteModal = true;
+    }
+
+    private void CancelDeleteTracker()
+    {
+        _showDeleteModal = false;
+        _trackerToDelete = null;
+    }
+
+    private async Task ExecuteDeleteTracker()
+    {
+        if (_trackerToDelete == null) return;
+
+        _showDeleteModal = false;
+        _deletingTrackerId = _trackerToDelete.TrackerId;
+        ClearMessages();
+        StateHasChanged();
+
+        try
+        {
+            var result = await FarmTrackerService.DeleteTrackerAsync(_trackerToDelete.TrackerId);
+            if (result.success)
+            {
+                _trackerMessage = $"Tracker '{_trackerToDelete.TrackerName}' eliminado correctamente";
+                _trackerSuccess = true;
+                await LoadMyTrackers();
+            }
+            else
+            {
+                _trackerMessage = $"Error eliminando tracker: {result.message}";
+                _trackerSuccess = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _trackerMessage = $"Error: {ex.Message}";
+            _trackerSuccess = false;
+        }
+        finally
+        {
+            _deletingTrackerId = -1;
+            _trackerToDelete = null;
+            StateHasChanged();
+        }
+    }
+
     private async Task SetActiveTab(string tab)
     {
         _loadingTab = true;
@@ -821,12 +924,12 @@
     /// </summary>
     private async Task UpdateTrackerDiscoveryData()
     {
-        if (_isLoading || StateService.CustomerInfo == null)
+        // Only poll when discovery tab is active (tab is commented out, so this rarely runs)
+        if (_isLoading || StateService.CustomerInfo == null || StateService.ActiveTab != "discovery")
             return;
 
         try
         {
-            // Automatically scan for new trackers in the background
             var scannedTrackers = await TrackerManagementService.GetDetectedTrackersAsync();
 
             if (scannedTrackers?.Any() == true)
@@ -834,26 +937,16 @@
                 var unregisteredCount = scannedTrackers.Count(t => t.Id == 0);
                 var registeredCount = scannedTrackers.Count(t => t.Id > 0);
 
-                string message;
-                if (unregisteredCount > 0)
-                {
-                    message = $"Se encontraron {unregisteredCount} dispositivos nuevos y {registeredCount} ya registrados";
-                }
-                else
-                {
-                    message = $"Se encontraron {registeredCount} dispositivos registrados transmitiendo";
-                }
+                string message = unregisteredCount > 0
+                    ? $"Se encontraron {unregisteredCount} dispositivos nuevos y {registeredCount} ya registrados"
+                    : $"Se encontraron {registeredCount} dispositivos registrados transmitiendo";
 
-                // Update state quietly (without showing success message)
                 StateService.UpdateScanState(scannedTrackers, message, true);
-
-                // Update the UI on the main thread
                 await InvokeAsync(StateHasChanged);
             }
         }
         catch (Exception ex)
         {
-            // Log error but don't break the update cycle
             Console.WriteLine($"Error updating tracker discovery data: {ex.Message}");
         }
     }

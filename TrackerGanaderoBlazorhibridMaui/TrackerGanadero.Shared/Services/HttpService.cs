@@ -43,61 +43,18 @@ namespace TrackerGanadero.Shared.Services
                 var json = JsonSerializer.Serialize(data, _jsonOptions);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-                Console.WriteLine($"=== HTTP REQUEST DETAILS ===");
-                Console.WriteLine($"POST Request to: {_httpClient.BaseAddress}{endpoint}");
-                Console.WriteLine($"Full URL: {_httpClient.BaseAddress}{endpoint}");
-                Console.WriteLine($"Request Body: {json}");
-                Console.WriteLine($"Content-Type: application/json");
-                Console.WriteLine($"HttpClient Timeout: {_httpClient.Timeout}");
-                Console.WriteLine($"=== SENDING REQUEST ===");
-
-                _logger.LogInformation("POST Request to: {BaseAddress}{Endpoint}", _httpClient.BaseAddress, endpoint);
-                _logger.LogInformation("Request Body: {RequestBody}", json);
+                _logger.LogInformation("POST {Endpoint}", endpoint);
 
                 var response = await _httpClient.PostAsync(endpoint, content);
-
-                Console.WriteLine($"=== HTTP RESPONSE DETAILS ===");
-                Console.WriteLine($"Response Status: {response.StatusCode} ({(int)response.StatusCode})");
-                var responseContent = await response.Content.ReadAsStringAsync();
-                Console.WriteLine($"Response Content: {responseContent}");
-                Console.WriteLine($"Response Headers: {response.Headers}");
-                Console.WriteLine($"=== END RESPONSE ===");
-
-                _logger.LogInformation("Response Status: {StatusCode}", response.StatusCode);
-                _logger.LogInformation("Response Content: {ResponseContent}", responseContent);
-
                 return await HandleResponse<T>(response);
-            }
-            catch (HttpRequestException httpEx)
-            {
-                Console.WriteLine($"=== HTTP REQUEST EXCEPTION ===");
-                Console.WriteLine($"HttpRequestException in POST to {endpoint}:");
-                Console.WriteLine($"Message: {httpEx.Message}");
-                Console.WriteLine($"Data: {httpEx.Data}");
-                Console.WriteLine($"Source: {httpEx.Source}");
-                Console.WriteLine($"StackTrace: {httpEx.StackTrace}");
-                Console.WriteLine($"=== END HTTP EXCEPTION ===");
-                _logger.LogError(httpEx, "HttpRequestException in POST request to {Endpoint}", endpoint);
-                throw;
             }
             catch (TaskCanceledException timeoutEx)
             {
-                Console.WriteLine($"=== TIMEOUT EXCEPTION ===");
-                Console.WriteLine($"Request to {endpoint} timed out:");
-                Console.WriteLine($"Message: {timeoutEx.Message}");
-                Console.WriteLine($"Timeout: {_httpClient.Timeout}");
-                Console.WriteLine($"=== END TIMEOUT EXCEPTION ===");
-                _logger.LogError(timeoutEx, "Request timeout for {Endpoint}", endpoint);
+                _logger.LogError(timeoutEx, "Request timeout for POST {Endpoint}", endpoint);
                 throw new HttpRequestException($"Request timeout for {endpoint}: {timeoutEx.Message}", timeoutEx);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"=== GENERAL EXCEPTION ===");
-                Console.WriteLine($"General exception in POST to {endpoint}:");
-                Console.WriteLine($"Type: {ex.GetType().Name}");
-                Console.WriteLine($"Message: {ex.Message}");
-                Console.WriteLine($"StackTrace: {ex.StackTrace}");
-                Console.WriteLine($"=== END GENERAL EXCEPTION ===");
                 _logger.LogError(ex, "Error in POST request to {Endpoint}", endpoint);
                 throw;
             }

@@ -22,7 +22,7 @@ namespace ApiWebTrackerGanado.Repositories
 
         public async Task<IEnumerable<LocationHistory>> GetAllAsync()
         {
-            return await _context.LocationHistories.ToListAsync();
+            return await _context.LocationHistories.AsNoTracking().ToListAsync();
         }
 
         public async Task<LocationHistory> AddAsync(LocationHistory locationHistory)
@@ -47,6 +47,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<LocationHistory>> GetAnimalLocationHistoryAsync(int animalId, DateTime from, DateTime to)
         {
             return await _context.LocationHistories
+                .AsNoTracking()
                 .Where(lh => lh.AnimalId == animalId &&
                             lh.Timestamp >= from &&
                             lh.Timestamp <= to)
@@ -57,6 +58,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<LocationHistory?> GetAnimalLastLocationAsync(int animalId)
         {
             return await _context.LocationHistories
+                .AsNoTracking()
                 .Where(lh => lh.AnimalId == animalId)
                 .OrderByDescending(lh => lh.Timestamp)
                 .FirstOrDefaultAsync();
@@ -66,6 +68,7 @@ namespace ApiWebTrackerGanado.Repositories
         {
             var cutoffTime = DateTime.UtcNow.AddHours(-hours);
             return await _context.LocationHistories
+                .AsNoTracking()
                 .Where(lh => lh.AnimalId == animalId && lh.Timestamp >= cutoffTime)
                 .OrderByDescending(lh => lh.Timestamp)
                 .ToListAsync();
@@ -74,6 +77,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<LocationHistory>> GetLocationsInAreaAsync(Polygon area, DateTime from, DateTime to)
         {
             return await _context.LocationHistories
+                .AsNoTracking()
                 .Where(lh => lh.Timestamp >= from &&
                             lh.Timestamp <= to &&
                             area.Contains(lh.Location))
@@ -85,6 +89,7 @@ namespace ApiWebTrackerGanado.Repositories
         {
             var cutoffTime = DateTime.UtcNow.AddHours(-hours);
             var activities = await _context.LocationHistories
+                .AsNoTracking()
                 .Where(lh => lh.AnimalId == animalId && lh.Timestamp >= cutoffTime)
                 .Select(lh => lh.ActivityLevel)
                 .ToListAsync();
@@ -95,6 +100,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<LocationHistory>> GetLocationsByTrackerAsync(int trackerId, DateTime from, DateTime to)
         {
             return await _context.LocationHistories
+                .AsNoTracking()
                 .Where(lh => lh.TrackerId == trackerId &&
                             lh.Timestamp >= from &&
                             lh.Timestamp <= to)
@@ -106,6 +112,7 @@ namespace ApiWebTrackerGanado.Repositories
         {
             var cutoffTime = DateTime.UtcNow - withinTimeSpan;
             return await _context.LocationHistories
+                .AsNoTracking()
                 .Where(lh => lh.AnimalId == animalId && lh.Timestamp >= cutoffTime)
                 .OrderByDescending(lh => lh.Timestamp)
                 .FirstOrDefaultAsync();

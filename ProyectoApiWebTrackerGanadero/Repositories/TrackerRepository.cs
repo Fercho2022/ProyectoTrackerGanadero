@@ -21,7 +21,7 @@ namespace ApiWebTrackerGanado.Repositories
 
         public async Task<IEnumerable<Tracker>> GetAllAsync()
         {
-            return await _context.Trackers.ToListAsync();
+            return await _context.Trackers.AsNoTracking().ToListAsync();
         }
 
         public async Task<Tracker> AddAsync(Tracker tracker)
@@ -46,12 +46,14 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<Tracker?> GetByDeviceIdAsync(string deviceId)
         {
             return await _context.Trackers
+                .AsNoTracking()
                 .FirstOrDefaultAsync(t => t.DeviceId == deviceId);
         }
 
         public async Task<IEnumerable<Tracker>> GetActiveTrackersAsync()
         {
             return await _context.Trackers
+                .AsNoTracking()
                 .Where(t => t.IsActive)
                 .Include(t => t.Animal)
                 .ToListAsync();
@@ -60,6 +62,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<Tracker>> GetTrackersWithLowBatteryAsync(int threshold = 20)
         {
             return await _context.Trackers
+                .AsNoTracking()
                 .Where(t => t.IsActive && t.BatteryLevel <= threshold)
                 .Include(t => t.Animal)
                 .ToListAsync();
@@ -68,6 +71,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<Tracker?> GetTrackerWithAnimalAsync(string deviceId)
         {
             return await _context.Trackers
+                .AsNoTracking()
                 .Where(t => t.DeviceId == deviceId)
                 .Include(t => t.Animal)
                 .ThenInclude(a => a!.Farm)
@@ -82,6 +86,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<Tracker>> GetAllTrackersWithAnimalsAsync()
         {
             return await _context.Trackers
+                .AsNoTracking()
                 .Include(t => t.Animal)
                 .ThenInclude(a => a!.Farm)
                 .ToListAsync();
@@ -101,12 +106,14 @@ namespace ApiWebTrackerGanado.Repositories
             }
 
             // Get the CustomerTrackers associated with that customer,
-            // including Tracker, Animal, and Farm data for full DTO mapping.
+            // including Tracker, AssignedAnimal, and Farm data for full DTO mapping.
+            // OPTIMIZACIÓN: Incluir AssignedAnimal y Farm para evitar N+1 queries
             return await _context.CustomerTrackers
+                .AsNoTracking()
                 .Where(ct => ct.CustomerId == customer.Id && ct.Status == "Active")
-                .Include(ct => ct.Tracker)
-                    .ThenInclude(t => t!.Animal) // Include Animal related to the Tracker
-                        .ThenInclude(a => a!.Farm) // Include Farm related to the Animal
+                .Include(ct => ct.Tracker)  // Include Tracker data
+                .Include(ct => ct.AssignedAnimal)  // Include AssignedAnimal (navegación correcta)
+                    .ThenInclude(a => a!.Farm)  // Include Farm related to AssignedAnimal
                 .ToListAsync();
         }
     }

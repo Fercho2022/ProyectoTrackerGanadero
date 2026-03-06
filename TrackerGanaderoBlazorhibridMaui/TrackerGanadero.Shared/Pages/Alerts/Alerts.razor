@@ -364,6 +364,11 @@
     private AlertDto? _selectedAlert;
     private CancellationTokenSource? _cancellationTokenSource;
 
+    // Named handlers for proper unsubscription
+    private Action<string>? _connectionStatusHandler;
+    private Action<AlertDto>? _alertReceivedHandler;
+    private Action<AlertDto>? _alertResolvedHandler;
+
     // Stats
     private int _highPriorityCount = 0;
     private int _mediumPriorityCount = 0;
@@ -373,7 +378,7 @@
     protected override async Task OnInitializedAsync()
     {
         await LoadAlerts();
-        await InitializeSignalR();
+        InitializeSignalR();
         StartAutoRefresh();
     }
 
@@ -408,22 +413,22 @@
         _resolvedTodayCount = _alerts.Count(a => a.IsResolved && a.ResolvedAt?.Date == today);
     }
 
-    private async Task InitializeSignalR()
+    private void InitializeSignalR()
     {
         try
         {
-            SignalRService.ConnectionStatusChanged += async (status) =>
+            _connectionStatusHandler = (status) =>
             {
-                await InvokeAsync(() =>
+                InvokeAsync(() =>
                 {
                     _signalRConnected = status == "Connected";
                     StateHasChanged();
                 });
             };
 
-            SignalRService.AlertReceived += async (alert) =>
+            _alertReceivedHandler = (alert) =>
             {
-                await InvokeAsync(async () =>
+                InvokeAsync(async () =>
                 {
                     _alerts.Insert(0, alert);
                     CalculateStats();
@@ -432,11 +437,10 @@
                 });
             };
 
-            SignalRService.AlertResolved += async (alert) =>
+            _alertResolvedHandler = (alert) =>
             {
-                await InvokeAsync(async () =>
+                InvokeAsync(async () =>
                 {
-                    // Remove resolved alert from the list automatically
                     var existingAlert = _alerts.FirstOrDefault(a => a.Id == alert.Id);
                     if (existingAlert != null)
                     {
@@ -444,10 +448,13 @@
                         CalculateStats();
                         await ApplyFilters();
                         StateHasChanged();
-                        Console.WriteLine($"✅ Alert {alert.Id} auto-removed from list: {alert.Message}");
                     }
                 });
             };
+
+            SignalRService.ConnectionStatusChanged += _connectionStatusHandler;
+            SignalRService.AlertReceived += _alertReceivedHandler;
+            SignalRService.AlertResolved += _alertResolvedHandler;
         }
         catch (Exception ex)
         {
@@ -659,6 +666,14 @@
 
     public void Dispose()
     {
+        // Unsubscribe SignalR event handlers to prevent memory leaks
+        if (_connectionStatusHandler != null)
+            SignalRService.ConnectionStatusChanged -= _connectionStatusHandler;
+        if (_alertReceivedHandler != null)
+            SignalRService.AlertReceived -= _alertReceivedHandler;
+        if (_alertResolvedHandler != null)
+            SignalRService.AlertResolved -= _alertResolvedHandler;
+
         try
         {
             _cancellationTokenSource?.Cancel();
@@ -668,7 +683,6 @@
             // Already disposed, ignore
         }
 
-        // Don't dispose immediately, let the task finish first
         Task.Delay(200).ContinueWith(_ =>
         {
             try

@@ -29,6 +29,18 @@
         else if (Farm != null)
         {
 
+            <!-- Quick Actions Bar -->
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <div>
+                    <span class="badge bg-success me-2">@(_farmAnimals?.Count(a => _animalTrackers.ContainsKey(a.Id) && _animalTrackers[a.Id] != null) ?? 0) asignados</span>
+                    <span class="badge bg-warning text-dark">@(_farmAnimals?.Count(a => !_animalTrackers.ContainsKey(a.Id) || _animalTrackers[a.Id] == null) ?? 0) sin tracker</span>
+                </div>
+                <button class="btn btn-primary" @onclick="ShowBulkAssignModal"
+                        disabled="@(_farmAnimals?.Any(a => !_animalTrackers.ContainsKey(a.Id) || _animalTrackers[a.Id] == null) != true)">
+                    <i class="fas fa-bolt me-1"></i>Asignación Rápida
+                </button>
+            </div>
+
             <!-- Animals with Trackers Section -->
             <div class="row">
                 <div class="col-12">
@@ -316,6 +328,165 @@
     </div>
 }
 
+<!-- Modal de Asignación Rápida -->
+@if (_showBulkAssignModal)
+{
+    <div class="modern-modal-overlay" @onclick="CloseBulkAssignModal">
+        <div class="modern-modal" style="max-width: 650px;" @onclick:stopPropagation="true">
+            <div class="modern-modal-header" style="background: linear-gradient(135deg, #1976d2, #42a5f5);">
+                <div class="icon-warning" style="background: rgba(255,255,255,0.2);">
+                    <i class="fas fa-bolt"></i>
+                </div>
+                <h3>Asignación Rápida de Trackers</h3>
+            </div>
+
+            <div class="modern-modal-body" style="text-align: left; max-height: 400px; overflow-y: auto;">
+                @if (_bulkAssignResult == null && !_isBulkAssigning)
+                {
+                    <p class="text-center mb-3">Se asignarán automáticamente trackers libres a animales sin tracker, en orden numérico.</p>
+
+                    <div class="d-flex justify-content-around mb-3">
+                        <div class="text-center">
+                            <div class="fs-3 fw-bold text-primary">@GetBulkPreviewTrackersCount()</div>
+                            <small class="text-muted">Trackers libres</small>
+                        </div>
+                        <div class="text-center">
+                            <div class="fs-3 fw-bold text-warning">@GetBulkPreviewAnimalsCount()</div>
+                            <small class="text-muted">Animales sin tracker</small>
+                        </div>
+                        <div class="text-center">
+                            <div class="fs-3 fw-bold text-success">@GetBulkPreviewPairsCount()</div>
+                            <small class="text-muted">Se asignarán</small>
+                        </div>
+                    </div>
+
+                    @if (GetBulkPreviewPairsCount() > 0)
+                    {
+                        <h6 class="mb-2">Vista previa de asignaciones:</h6>
+                        <div class="table-responsive" style="max-height: 250px; overflow-y: auto;">
+                            <table class="table table-sm table-striped mb-0">
+                                <thead class="table-light" style="position: sticky; top: 0;">
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Animal</th>
+                                        <th><i class="fas fa-arrow-left me-1"></i></th>
+                                        <th>Tracker</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var pair in GetBulkPreviewPairs())
+                                    {
+                                        <tr>
+                                            <td><small class="text-muted">@pair.Index</small></td>
+                                            <td>
+                                                <strong>@pair.AnimalName</strong>
+                                                @if (!string.IsNullOrEmpty(pair.AnimalTag))
+                                                {
+                                                    <br><small class="text-muted">@pair.AnimalTag</small>
+                                                }
+                                            </td>
+                                            <td class="text-center text-success"><i class="fas fa-link"></i></td>
+                                            <td>
+                                                <strong>@pair.TrackerName</strong>
+                                                <br><small class="text-muted">@pair.DeviceId</small>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="alert alert-warning text-center">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            No hay pares disponibles para asignar.
+                        </div>
+                    }
+                }
+                else if (_isBulkAssigning)
+                {
+                    <div class="text-center py-4">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">Asignando...</span>
+                        </div>
+                        <p class="mt-2">Asignando trackers...</p>
+                    </div>
+                }
+                else if (_bulkAssignResult != null)
+                {
+                    <div class="text-center">
+                        @if (_bulkAssignResult.Success && _bulkAssignResult.AssignedCount > 0)
+                        {
+                            <div class="mb-3">
+                                <i class="fas fa-check-circle text-success" style="font-size: 3rem;"></i>
+                            </div>
+                            <h5 class="text-success">@_bulkAssignResult.AssignedCount trackers asignados</h5>
+                            <p class="text-muted">@_bulkAssignResult.Message</p>
+                        }
+                        else
+                        {
+                            <div class="alert alert-warning">
+                                <i class="fas fa-info-circle me-2"></i>@_bulkAssignResult.Message
+                            </div>
+                        }
+
+                        @if (_bulkAssignResult.Assignments?.Any() == true)
+                        {
+                            <div class="table-responsive mt-3" style="max-height: 250px; overflow-y: auto; text-align: left;">
+                                <table class="table table-sm table-striped mb-0">
+                                    <thead class="table-light" style="position: sticky; top: 0;">
+                                        <tr>
+                                            <th>#</th>
+                                            <th>Animal</th>
+                                            <th>Tracker</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @{ var idx = 0; }
+                                        @foreach (var item in _bulkAssignResult.Assignments)
+                                        {
+                                            idx++;
+                                            <tr>
+                                                <td><small class="text-muted">@idx</small></td>
+                                                <td><strong>@item.AnimalName</strong> <small class="text-muted">@item.AnimalTag</small></td>
+                                                <td><strong>@item.DeviceId</strong></td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="modern-modal-footer">
+                @if (_bulkAssignResult == null && !_isBulkAssigning)
+                {
+                    <button type="button" class="btn-modern btn-cancel" @onclick="CloseBulkAssignModal">
+                        <i class="fas fa-times"></i>
+                        <span>Cancelar</span>
+                    </button>
+                    <button type="button" class="btn-modern" style="background: linear-gradient(135deg, #1976d2, #42a5f5); color: white;"
+                            @onclick="ExecuteBulkAssign" disabled="@(GetBulkPreviewPairsCount() == 0)">
+                        <i class="fas fa-bolt"></i>
+                        <span>Asignar Todos</span>
+                    </button>
+                }
+                else
+                {
+                    <button type="button" class="btn-modern" style="background: linear-gradient(135deg, #4caf50, #66bb6a); color: white;"
+                            @onclick="CloseBulkAssignModal">
+                        <i class="fas fa-check"></i>
+                        <span>Cerrar</span>
+                    </button>
+                }
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     [Parameter] public FarmDto? Farm { get; set; }
 
@@ -325,9 +496,7 @@
     private List<AnimalDto>? _farmAnimals;
     private Dictionary<int, AnimalTrackerInfoDto?> _animalTrackers = new();
 
-    // Global tracker assignments - almacenar asignaciones de TODAS las granjas
-    private HashSet<string> _globallyAssignedDeviceIds = new();
-    private HashSet<int> _globallyAssignedCustomerTrackerIds = new();
+    // (Removed: global tracker assignments - the API already returns only unassigned trackers)
 
     // Modal state
     private bool _showAssignModal = false;
@@ -337,6 +506,11 @@
     private int _selectedTrackerCustomerId = 0;
     private string? _assignmentMessage;
     private bool _assignmentSuccess = false;
+
+    // Bulk assign modal state
+    private bool _showBulkAssignModal = false;
+    private bool _isBulkAssigning = false;
+    private BulkAssignResultDto? _bulkAssignResult;
 
     // Modern delete modal state
     private bool _showDeleteModal = false;
@@ -385,20 +559,15 @@
             // Load animals in this farm
             _farmAnimals = await AnimalService.GetAnimalsAsync(Farm!.Id);
 
-            // Load tracker info for each animal
-            _animalTrackers.Clear();
-            foreach (var animal in _farmAnimals)
-            {
-                try
-                {
-                    var trackerInfo = await FarmTrackerService.GetAnimalTrackerInfoAsync(animal.Id);
-                    _animalTrackers[animal.Id] = trackerInfo;
-                }
-                catch
-                {
-                    _animalTrackers[animal.Id] = null;
-                }
-            }
+            // OPTIMIZACIÓN: Load tracker info for ALL animals in a single request
+            // Old code (N+1 problem - 120+ requests):
+            // foreach (var animal in _farmAnimals) {
+            //     var trackerInfo = await FarmTrackerService.GetAnimalTrackerInfoAsync(animal.Id);
+            //     _animalTrackers[animal.Id] = trackerInfo;
+            // }
+
+            // New code (1 request):
+            _animalTrackers = await FarmTrackerService.GetFarmAnimalsWithTrackersAsync(Farm!.Id);
         }
         catch (Exception ex)
         {
@@ -435,8 +604,6 @@
         try
         {
             await LoadData();
-            // IMPORTANTE: También cargar información global de asignaciones
-            await LoadGlobalTrackerAssignments();
             StateHasChanged();
         }
         catch (Exception ex)
@@ -476,23 +643,36 @@
             {
                 _assignmentMessage = "Tracker asignado exitosamente al animal";
                 _assignmentSuccess = true;
-                await LoadData(); // Reload data to reflect changes
-                await Task.Delay(1500);
+
+                // Cerrar modal inmediatamente para mejor UX
+                _isAssigning = false;
+                StateHasChanged();
+                await Task.Delay(500); // Breve delay para mostrar el mensaje de éxito
+
                 CloseAssignModal();
+
+                // Recargar datos en segundo plano (sin bloquear UI)
+                _ = Task.Run(async () =>
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        await LoadData();
+                        StateHasChanged();
+                    });
+                });
             }
             else
             {
                 _assignmentMessage = "Error asignando el tracker. Intente nuevamente.";
                 _assignmentSuccess = false;
+                _isAssigning = false;
+                StateHasChanged();
             }
         }
         catch (Exception ex)
         {
             _assignmentMessage = $"Error: {ex.Message}";
             _assignmentSuccess = false;
-        }
-        finally
-        {
             _isAssigning = false;
             StateHasChanged();
         }
@@ -754,89 +934,106 @@
         }
     }
 
-    /// <summary>
-    /// Carga información global de asignaciones de trackers desde todas las granjas
-    /// </summary>
-    private async Task LoadGlobalTrackerAssignments()
-    {
-        try
-        {
-            // Limpiar sets globales
-            _globallyAssignedDeviceIds.Clear();
-            _globallyAssignedCustomerTrackerIds.Clear();
-
-            // Consultar TODOS los animales de TODAS las granjas (sin filtro de granja)
-            var allAnimals = await AnimalService.GetAnimalsAsync(null); // null = todas las granjas
-
-            if (allAnimals?.Any() == true)
-            {
-                foreach (var animal in allAnimals)
-                {
-                    try
-                    {
-                        var trackerInfo = await FarmTrackerService.GetAnimalTrackerInfoAsync(animal.Id);
-                        if (trackerInfo != null)
-                        {
-                            _globallyAssignedDeviceIds.Add(trackerInfo.DeviceId);
-                            _globallyAssignedCustomerTrackerIds.Add(trackerInfo.CustomerTrackerId);
-                        }
-                    }
-                    catch
-                    {
-                        // Ignorar errores individuales y continuar
-                    }
-                }
-            }
-
-            Console.WriteLine($"DEBUG LoadGlobalTrackerAssignments: Found {_globallyAssignedDeviceIds.Count} assigned trackers globally");
-            Console.WriteLine($"  Assigned Device IDs: [{string.Join(", ", _globallyAssignedDeviceIds)}]");
-            Console.WriteLine($"  Assigned Customer Tracker IDs: [{string.Join(", ", _globallyAssignedCustomerTrackerIds)}]");
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"ERROR in LoadGlobalTrackerAssignments: {ex.Message}");
-        }
-    }
+    // LoadGlobalTrackerAssignments REMOVED: The API endpoint GetAvailableTrackersForFarmsAsync
+    // already filters by ct.AssignedAnimal == null, so it only returns truly unassigned trackers.
+    // The previous implementation made 120+ individual HTTP calls (1 per animal) which was the
+    // primary cause of app slowness.
 
     /// <summary>
     /// Obtiene la lista de trackers que NO están asignados a ningún animal GLOBALMENTE (en todas las granjas)
     /// </summary>
     private List<AvailableFarmTrackerDto> GetUnassignedTrackers()
     {
-        if (_availableTrackers == null || !_availableTrackers.Any())
-            return new List<AvailableFarmTrackerDto>();
+        // The API already returns only unassigned trackers (ct.AssignedAnimal == null)
+        // No additional client-side filtering needed
+        return _availableTrackers?.ToList() ?? new List<AvailableFarmTrackerDto>();
+    }
 
+    // Helper methods for bulk assign preview (avoid @{} blocks in Razor)
+    private int GetBulkPreviewTrackersCount() => GetUnassignedTrackers()?.Count ?? 0;
+    private int GetBulkPreviewAnimalsCount() => _farmAnimals?.Count(a => !_animalTrackers.ContainsKey(a.Id) || _animalTrackers[a.Id] == null) ?? 0;
+    private int GetBulkPreviewPairsCount() => Math.Min(GetBulkPreviewTrackersCount(), GetBulkPreviewAnimalsCount());
+
+    private List<(int Index, string AnimalName, string? AnimalTag, string TrackerName, string DeviceId)> GetBulkPreviewPairs()
+    {
+        var animals = _farmAnimals?.Where(a => !_animalTrackers.ContainsKey(a.Id) || _animalTrackers[a.Id] == null)
+            .OrderBy(a => a.Tag).ThenBy(a => a.Name).ToList();
+        var trackers = GetUnassignedTrackers()?.OrderBy(t => t.DeviceId).ToList();
+
+        if (animals == null || trackers == null) return new();
+
+        var count = Math.Min(animals.Count, trackers.Count);
+        var result = new List<(int, string, string?, string, string)>();
+        for (int i = 0; i < count; i++)
+        {
+            result.Add((i + 1, animals[i].Name, animals[i].Tag, trackers[i].DisplayName, trackers[i].DeviceId));
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Muestra el modal de asignación rápida
+    /// </summary>
+    private async void ShowBulkAssignModal()
+    {
+        _bulkAssignResult = null;
+        _isBulkAssigning = false;
+        _showBulkAssignModal = true;
+
+        // Refrescar datos
         try
         {
-            // USAR ASIGNACIONES GLOBALES para filtrar trackers
-            // Esto garantiza que trackers asignados en cualquier granja no aparezcan como disponibles
-
-            var globallyUnassignedTrackers = _availableTrackers
-                .Where(tracker =>
-                    !_globallyAssignedDeviceIds.Contains(tracker.DeviceId) &&
-                    !_globallyAssignedCustomerTrackerIds.Contains(tracker.CustomerTrackerId))
-                .ToList();
-
-            // Debug logging mejorado
-            Console.WriteLine($"DEBUG GetUnassignedTrackers (Farm: {Farm?.Name ?? "Unknown"}):");
-            Console.WriteLine($"  Total available trackers: {_availableTrackers.Count}");
-            Console.WriteLine($"  Globally assigned device IDs: [{string.Join(", ", _globallyAssignedDeviceIds)}]");
-            Console.WriteLine($"  Globally assigned customer tracker IDs: [{string.Join(", ", _globallyAssignedCustomerTrackerIds)}]");
-            Console.WriteLine($"  Globally unassigned trackers: {globallyUnassignedTrackers.Count}");
-
-            foreach (var tracker in _availableTrackers)
-            {
-                var isGloballyAssigned = _globallyAssignedDeviceIds.Contains(tracker.DeviceId) ||
-                                       _globallyAssignedCustomerTrackerIds.Contains(tracker.CustomerTrackerId);
-                Console.WriteLine($"    - {tracker.DeviceId} (ID: {tracker.CustomerTrackerId}) - {(isGloballyAssigned ? "ASSIGNED GLOBALLY" : "available")}");
-            }
-
-            return globallyUnassignedTrackers;
+            await LoadData();
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"ERROR in GetUnassignedTrackers: {ex.Message}");
-            return _availableTrackers?.ToList() ?? new List<AvailableFarmTrackerDto>();
+            Console.WriteLine($"Error refreshing for bulk assign: {ex.Message}");
+        }
+
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Cierra el modal de asignación rápida
+    /// </summary>
+    private void CloseBulkAssignModal()
+    {
+        _showBulkAssignModal = false;
+        _bulkAssignResult = null;
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Ejecuta la asignación masiva de trackers
+    /// </summary>
+    private async Task ExecuteBulkAssign()
+    {
+        if (Farm == null) return;
+
+        _isBulkAssigning = true;
+        StateHasChanged();
+
+        try
+        {
+            _bulkAssignResult = await FarmTrackerService.BulkAssignTrackersAsync(Farm.Id);
+
+            if (_bulkAssignResult.Success && _bulkAssignResult.AssignedCount > 0)
+            {
+                // Reload data to reflect changes
+                await LoadData();
+            }
+        }
+        catch (Exception ex)
+        {
+            _bulkAssignResult = new BulkAssignResultDto
+            {
+                Message = $"Error: {ex.Message}"
+            };
+        }
+        finally
+        {
+            _isBulkAssigning = false;
+            StateHasChanged();
         }
     }
 

@@ -41,8 +41,7 @@ namespace ApiWebTrackerGanado.Services
 
                 // Obtener CustomerTrackers activos que no están asignados a animales
                 var availableTrackers = await _context.CustomerTrackers
-                    .Include(ct => ct.Tracker)
-                    .Include(ct => ct.AssignedAnimal)  // Include navigation to properly detect assignments
+                    .AsNoTracking()
                     .Where(ct => ct.CustomerId == customer.Id &&
                                 ct.Status == "Active" &&
                                 ct.AssignedAnimal == null)
@@ -75,162 +74,173 @@ namespace ApiWebTrackerGanado.Services
 
         /// <summary>
         /// Asigna un CustomerTracker a un animal específico
+        /// OPTIMIZADO: Queries secuenciales eficientes (EF no soporta paralelas en mismo DbContext)
         /// </summary>
-        public async Task<bool> AssignTrackerToAnimalAsync(int customerTrackerId, int animalId, int userId)
+        public async Task<(bool success, string message)> AssignTrackerToAnimalAsync(int customerTrackerId, int animalId, int userId)
         {
             try
             {
-                _logger.LogInformation($"[ASSIGN] Starting assignment: CustomerTrackerId={customerTrackerId}, AnimalId={animalId}, UserId={userId}");
+                _logger.LogInformation("[ASSIGN] CT={CustomerTrackerId}, Animal={AnimalId}, User={UserId}", customerTrackerId, animalId, userId);
 
-                // WORKAROUND: The client sends TrackerId in the CustomerTrackerId field.
-                // First, try to find the CustomerTracker by TrackerId.
-                var customerTrackerInfo = await _context.CustomerTrackers
-                    .Where(ct => ct.TrackerId == customerTrackerId)
-                    .Select(ct => new { ct.Id, ct.TrackerId, ct.CustomerId, ct.Status })
+                // Query 1: CustomerTracker (try by Id, fallback by TrackerId) + Animal + existingAssignment en una sola query
+                var customerTracker = await _context.CustomerTrackers
+                    .FirstOrDefaultAsync(ct => ct.Id == customerTrackerId || ct.TrackerId == customerTrackerId);
+
+                if (customerTracker == null)
+                {
+                    return (false, $"No se encontró CustomerTracker con ID {customerTrackerId}. Asigne el tracker desde el Panel Admin primero.");
+                }
+
+                // Query 2: Validate Status
+                if (customerTracker.Status != "Active")
+                {
+                    return (false, $"El CustomerTracker no está activo (Estado: {customerTracker.Status}).");
+                }
+
+                // Query 3: Check if already assigned to another animal
+                var existingAssignment = await _context.Animals
+                    .Where(a => a.CustomerTrackerId == customerTracker.Id && a.Id != animalId)
+                    .Select(a => new { a.Id, a.Name })
                     .FirstOrDefaultAsync();
 
-                _logger.LogInformation($"[ASSIGN] Search by TrackerId={customerTrackerId}: {(customerTrackerInfo != null ? $"Found CustomerTracker.Id={customerTrackerInfo.Id}" : "NOT FOUND")}");
-
-                // If not found, maybe the client bug was fixed and it's a real CustomerTrackerId.
-                if (customerTrackerInfo == null)
-                {
-                    customerTrackerInfo = await _context.CustomerTrackers
-                        .Where(ct => ct.Id == customerTrackerId)
-                        .Select(ct => new { ct.Id, ct.TrackerId, ct.CustomerId, ct.Status })
-                        .FirstOrDefaultAsync();
-
-                    _logger.LogInformation($"[ASSIGN] Search by CustomerTrackerId={customerTrackerId}: {(customerTrackerInfo != null ? $"Found CustomerTracker.Id={customerTrackerInfo.Id}" : "NOT FOUND")}");
-                }
-
-                // SECURITY FIX: DISABLE auto-assignment of orphaned trackers
-                // Trackers must be assigned manually from Admin Panel first
-                if (customerTrackerInfo == null)
-                {
-                    _logger.LogError($"[SECURITY] No CustomerTracker found for ID {customerTrackerId}. Tracker must be assigned from Admin Panel first. Auto-assignment is disabled.");
-                    return false;
-                }
-
-                // DEPRECATED: RepairOrphanedTracker functionality disabled for security
-                // Old code (now disabled):
-                /*
-                if (customerTrackerInfo == null)
-                {
-                    _logger.LogWarning($"No CustomerTracker found for ID {customerTrackerId}. Attempting to repair as an orphaned tracker.");
-                    var repairedTracker = await RepairOrphanedTracker(customerTrackerId, userId);
-                    if (repairedTracker != null)
-                    {
-                        customerTrackerInfo = new {
-                            Id = (int)repairedTracker.Id,
-                            TrackerId = (int)repairedTracker.TrackerId,
-                            CustomerId = (int)repairedTracker.CustomerId,
-                            Status = (string)repairedTracker.Status
-                        };
-                        _logger.LogInformation($"Successfully repaired and created CustomerTracker {customerTrackerInfo.Id} for Tracker {customerTrackerInfo.TrackerId}.");
-                    }
-                    else
-                    {
-                        _logger.LogWarning($"Failed to find or repair a CustomerTracker for ID {customerTrackerId}.");
-                        return false;
-                    }
-                }
-                */
-
-                // --- Validation Section ---
-
-                _logger.LogInformation($"[ASSIGN] Found CustomerTracker: Id={customerTrackerInfo.Id}, TrackerId={customerTrackerInfo.TrackerId}, CustomerId={customerTrackerInfo.CustomerId}, Status={customerTrackerInfo.Status}");
-
-                // 1. Validate Ownership (RELAXED FOR DEVELOPMENT)
-                var customer = await _context.Customers.FirstOrDefaultAsync(c => c.Id == customerTrackerInfo.CustomerId);
-                _logger.LogInformation($"[ASSIGN] Customer lookup: CustomerId={customerTrackerInfo.CustomerId}, Found={customer != null}, CustomerUserId={customer?.UserId}, ExpectedUserId={userId}");
-                if (customer == null)
-                {
-                    _logger.LogWarning($"[ASSIGN] VALIDATION FAILED: Customer {customerTrackerInfo.CustomerId} not found.");
-                    return false;
-                }
-                // RELAXED: Allow cross-user assignment during development
-                if (customer.UserId != userId)
-                {
-                    _logger.LogWarning($"[ASSIGN] WARNING: CustomerTracker {customerTrackerInfo.Id} belongs to user {customer.UserId} but assigning to user {userId}. Allowing for development.");
-                }
-
-                // 2. Validate Status
-                if (customerTrackerInfo.Status != "Active")
-                {
-                    _logger.LogWarning($"Validation failed: CustomerTracker {customerTrackerInfo.Id} is not active (Status: {customerTrackerInfo.Status}).");
-                    return false;
-                }
-
-                // 3. Validate if already assigned to another animal
-                var existingAssignment = await _context.Animals.FirstOrDefaultAsync(a => a.CustomerTrackerId == customerTrackerInfo.Id);
                 if (existingAssignment != null)
                 {
-                    _logger.LogWarning($"Validation failed: CustomerTracker {customerTrackerInfo.Id} is already assigned to animal {existingAssignment.Id}.");
-                    return false;
+                    return (false, $"El tracker ya está asignado al animal {existingAssignment.Name} (ID: {existingAssignment.Id}).");
                 }
 
-                // 4. Validate Animal
-                var animal = await _context.Animals.Include(a => a.Farm).FirstOrDefaultAsync(a => a.Id == animalId);
-                _logger.LogInformation($"[ASSIGN] Animal lookup: AnimalId={animalId}, Found={animal != null}, AnimalName={animal?.Name}, FarmId={animal?.FarmId}");
+                // Query 4: Load Animal with Farm
+                var animal = await _context.Animals
+                    .Include(a => a.Farm)
+                    .FirstOrDefaultAsync(a => a.Id == animalId);
+
                 if (animal == null)
                 {
-                    _logger.LogWarning($"[ASSIGN] VALIDATION FAILED: Animal {animalId} not found.");
-                    return false;
+                    return (false, $"Animal con ID {animalId} no encontrado.");
                 }
                 if (animal.Farm == null)
                 {
-                    _logger.LogWarning($"[ASSIGN] VALIDATION FAILED: Animal {animalId} has an invalid or missing FarmId ({animal.FarmId}).");
-                    return false;
-                }
-                _logger.LogInformation($"[ASSIGN] Farm validation: FarmId={animal.Farm.Id}, FarmUserId={animal.Farm.UserId}, ExpectedUserId={userId}");
-                // RELAXED: Allow cross-user assignment during development
-                if (animal.Farm.UserId != userId)
-                {
-                    _logger.LogWarning($"[ASSIGN] WARNING: Animal {animalId} (Farm: {animal.Farm.Id}) belongs to user {animal.Farm.UserId} but assigning to user {userId}. Allowing for development.");
+                    return (false, $"El animal no tiene una granja válida asociada.");
                 }
 
                 // --- Assignment Section ---
 
                 // If the target animal already has a different tracker, unassign it first.
-                if (animal.CustomerTrackerId.HasValue)
+                if (animal.CustomerTrackerId.HasValue && animal.CustomerTrackerId.Value != customerTracker.Id)
                 {
-                    _logger.LogInformation($"Animal {animalId} already has CustomerTracker {animal.CustomerTrackerId}. Unassigning it first.");
-                    // Just set the properties to null instead of calling the method to avoid recursion
                     animal.TrackerId = null;
                     animal.CustomerTrackerId = null;
-                    await _context.SaveChangesAsync();
                 }
 
-                // Assign the new tracker using Entity Framework to maintain navigation relationships
-                // Load the CustomerTracker entity to establish navigation (avoid loading License navigation)
-                var customerTracker = await _context.CustomerTrackers
-                    .Where(ct => ct.Id == customerTrackerInfo.Id)
-                    .FirstOrDefaultAsync();
-
-                if (customerTracker == null)
-                {
-                    _logger.LogError($"Could not load CustomerTracker with ID {customerTrackerInfo.Id}");
-                    return false;
-                }
-
-                // Update the animal with proper EF tracking
-                animal.TrackerId = customerTrackerInfo.TrackerId;
-                animal.CustomerTrackerId = customerTrackerInfo.Id;
-                animal.CustomerTracker = customerTracker;  // Establish navigation relationship
+                // Update the animal
+                animal.TrackerId = customerTracker.TrackerId;
+                animal.CustomerTrackerId = customerTracker.Id;
+                animal.CustomerTracker = customerTracker;
                 animal.UpdatedAt = DateTime.UtcNow;
 
-                // Update the CustomerTracker timestamp and establish reverse navigation
+                // Update the CustomerTracker
                 customerTracker.UpdatedAt = DateTime.UtcNow;
-                customerTracker.AssignedAnimal = animal;  // Establish reverse navigation relationship
+                customerTracker.AssignedAnimal = animal;
 
                 await _context.SaveChangesAsync();
 
-                _logger.LogInformation($"Successfully assigned CustomerTracker {customerTrackerInfo.Id} to animal {animalId}.");
-                return true;
+                _logger.LogInformation("Assigned CT {CustomerTrackerId} to animal {AnimalId}", customerTracker.Id, animalId);
+                return (true, $"Tracker asignado exitosamente al animal {animal.Name}.");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "An exception occurred in AssignTrackerToAnimalAsync for CustomerTrackerId {CustomerTrackerId} and AnimalId {AnimalId}", customerTrackerId, animalId);
-                throw; // Let the controller handle the final response
+                _logger.LogError(ex, "Exception in AssignTrackerToAnimalAsync CT={CustomerTrackerId} Animal={AnimalId}", customerTrackerId, animalId);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Asignación masiva rápida: vincula trackers libres con animales sin tracker, en orden numérico
+        /// </summary>
+        public async Task<BulkAssignResultDto> BulkAssignTrackersAsync(int farmId, int userId)
+        {
+            var result = new BulkAssignResultDto();
+
+            try
+            {
+                // 1. Get user's customer
+                var customer = await _context.Customers
+                    .FirstOrDefaultAsync(c => c.UserId == userId && c.Status == "Active");
+
+                if (customer == null)
+                {
+                    result.Message = "El usuario no tiene un Customer activo.";
+                    return result;
+                }
+
+                // 2. Get all unassigned CustomerTrackers for this customer, ordered by DeviceId
+                var assignedCustomerTrackerIds = await _context.Animals
+                    .Where(a => a.CustomerTrackerId.HasValue)
+                    .Select(a => a.CustomerTrackerId!.Value)
+                    .ToListAsync();
+
+                var freeTrackers = await _context.CustomerTrackers
+                    .Include(ct => ct.Tracker)
+                    .Where(ct => ct.CustomerId == customer.Id &&
+                                ct.Status == "Active" &&
+                                !assignedCustomerTrackerIds.Contains(ct.Id))
+                    .OrderBy(ct => ct.Tracker!.DeviceId)
+                    .ToListAsync();
+
+                // 3. Get all animals without tracker in the farm, ordered by Tag
+                var animalsWithoutTracker = await _context.Animals
+                    .Where(a => a.FarmId == farmId && !a.CustomerTrackerId.HasValue)
+                    .OrderBy(a => a.Tag)
+                    .ThenBy(a => a.Name)
+                    .ToListAsync();
+
+                result.TotalFreeTrackers = freeTrackers.Count;
+                result.TotalAnimalsWithoutTracker = animalsWithoutTracker.Count;
+
+                // 4. Assign in order: first free tracker to first animal without tracker
+                var pairsToAssign = Math.Min(freeTrackers.Count, animalsWithoutTracker.Count);
+
+                for (int i = 0; i < pairsToAssign; i++)
+                {
+                    var ct = freeTrackers[i];
+                    var animal = animalsWithoutTracker[i];
+
+                    animal.TrackerId = ct.TrackerId;
+                    animal.CustomerTrackerId = ct.Id;
+                    animal.CustomerTracker = ct;
+                    animal.UpdatedAt = DateTime.UtcNow;
+
+                    ct.UpdatedAt = DateTime.UtcNow;
+                    ct.AssignedAnimal = animal;
+
+                    result.Assignments.Add(new BulkAssignItemDto
+                    {
+                        AnimalId = animal.Id,
+                        AnimalName = animal.Name ?? "Sin nombre",
+                        AnimalTag = animal.Tag,
+                        CustomerTrackerId = ct.Id,
+                        DeviceId = ct.Tracker?.DeviceId ?? "Unknown"
+                    });
+                }
+
+                if (pairsToAssign > 0)
+                {
+                    await _context.SaveChangesAsync();
+                }
+
+                result.Success = true;
+                result.AssignedCount = pairsToAssign;
+                result.Message = pairsToAssign > 0
+                    ? $"Se asignaron {pairsToAssign} trackers exitosamente."
+                    : "No hay pares disponibles para asignar.";
+
+                _logger.LogInformation("Bulk assign: {Count} trackers assigned in farm {FarmId}", pairsToAssign, farmId);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in BulkAssignTrackersAsync for farm {FarmId}", farmId);
+                result.Message = $"Error: {ex.Message}";
+                return result;
             }
         }
 
@@ -436,42 +446,89 @@ namespace ApiWebTrackerGanado.Services
         {
             try
             {
-                var animal = await _context.Animals
-                    .Include(a => a.Farm)
-                    .Include(a => a.CustomerTracker)
-                        .ThenInclude(ct => ct!.Tracker)
-                    .FirstOrDefaultAsync(a => a.Id == animalId);
+                var trackerInfo = await _context.Animals
+                    .AsNoTracking()
+                    .Where(a => a.Id == animalId && a.Farm.UserId == userId)
+                    .Select(a => a.CustomerTracker != null && a.CustomerTracker.Tracker != null
+                        ? new AnimalTrackerInfoDto
+                        {
+                            AnimalId = a.Id,
+                            CustomerTrackerId = a.CustomerTrackerId!.Value,
+                            TrackerId = a.CustomerTracker.Tracker.Id,
+                            DeviceId = a.CustomerTracker.Tracker.DeviceId,
+                            TrackerName = a.CustomerTracker.Tracker.Name ?? a.CustomerTracker.Tracker.DeviceId,
+                            Model = a.CustomerTracker.Tracker.Model,
+                            BatteryLevel = a.CustomerTracker.Tracker.BatteryLevel,
+                            LastSeen = a.CustomerTracker.Tracker.LastSeen,
+                            IsOnline = a.CustomerTracker.Tracker.LastSeen > DateTime.UtcNow.AddMinutes(-5),
+                            AssignedAt = a.CustomerTracker.AssignedAt
+                        }
+                        : null)
+                    .FirstOrDefaultAsync();
 
-                if (animal == null || animal.Farm.UserId != userId)
-                {
-                    return null;
-                }
-
-                if (animal.CustomerTracker == null || animal.CustomerTracker.Tracker == null)
-                {
-                    return null;
-                }
-
-                var tracker = animal.CustomerTracker.Tracker;
-
-                return new AnimalTrackerInfoDto
-                {
-                    AnimalId = animalId,
-                    CustomerTrackerId = animal.CustomerTrackerId.Value,
-                    TrackerId = tracker.Id,
-                    DeviceId = tracker.DeviceId,
-                    TrackerName = tracker.Name ?? tracker.DeviceId,
-                    // CustomName = null, // animal.CustomerTracker.CustomName, // Comentado porque la propiedad no existe
-                    Model = tracker.Model,
-                    BatteryLevel = tracker.BatteryLevel,
-                    LastSeen = tracker.LastSeen,
-                    IsOnline = tracker.LastSeen > DateTime.UtcNow.AddMinutes(-5),
-                    AssignedAt = animal.CustomerTracker.AssignedAt
-                };
+                return trackerInfo;
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error getting tracker info for animal {AnimalId}", animalId);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Obtiene todos los animales de una granja con su información de tracker en una sola consulta
+        /// OPTIMIZACIÓN: Elimina el problema N+1 de hacer 120+ requests individuales
+        /// </summary>
+        public async Task<List<AnimalWithTrackerDto>> GetFarmAnimalsWithTrackersAsync(int farmId, int userId)
+        {
+            try
+            {
+                // Verificar que la granja pertenece al usuario
+                var farm = await _context.Farms
+                    .FirstOrDefaultAsync(f => f.Id == farmId && f.UserId == userId);
+
+                if (farm == null)
+                {
+                    _logger.LogWarning("Farm {FarmId} not found or does not belong to user {UserId}", farmId, userId);
+                    return new List<AnimalWithTrackerDto>();
+                }
+
+                // Una sola query que trae todos los animales con sus trackers
+                var animalsWithTrackers = await _context.Animals
+                    .AsNoTracking()
+                    .Where(a => a.FarmId == farmId)
+                    .OrderBy(a => a.Name)
+                    .Select(a => new AnimalWithTrackerDto
+                    {
+                        AnimalId = a.Id,
+                        AnimalName = a.Name,
+                        AnimalTag = a.Tag,
+                        TrackerInfo = a.CustomerTracker != null && a.CustomerTracker.Tracker != null
+                            ? new AnimalTrackerInfoDto
+                            {
+                                AnimalId = a.Id,
+                                CustomerTrackerId = a.CustomerTrackerId!.Value,
+                                TrackerId = a.CustomerTracker.Tracker.Id,
+                                DeviceId = a.CustomerTracker.Tracker.DeviceId,
+                                TrackerName = a.CustomerTracker.Tracker.Name ?? a.CustomerTracker.Tracker.DeviceId,
+                                Model = a.CustomerTracker.Tracker.Model,
+                                BatteryLevel = a.CustomerTracker.Tracker.BatteryLevel,
+                                LastSeen = a.CustomerTracker.Tracker.LastSeen,
+                                IsOnline = a.CustomerTracker.Tracker.LastSeen > DateTime.UtcNow.AddMinutes(-5),
+                                AssignedAt = a.CustomerTracker.AssignedAt
+                            }
+                            : null
+                    })
+                    .ToListAsync();
+
+                _logger.LogInformation("Retrieved {Count} animals with tracker info for farm {FarmId} in single query",
+                    animalsWithTrackers.Count, farmId);
+
+                return animalsWithTrackers;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting animals with trackers for farm {FarmId}", farmId);
                 throw;
             }
         }
@@ -525,6 +582,14 @@ namespace ApiWebTrackerGanado.Services
                             trackerId);
 
                     _logger.LogInformation("Unassigned tracker by CustomerTracker from {Count} additional animals", affectedAnimalsByCustomerTracker);
+
+                    // Eliminar LocationHistories asociadas al tracker
+                    var deletedLocationHistories = await _context.LocationHistories
+                        .Where(lh => lh.TrackerId == trackerId)
+                        .ExecuteDeleteAsync();
+
+                    _logger.LogInformation("Removed {Count} LocationHistory records for tracker {TrackerId}",
+                        deletedLocationHistories, trackerId);
 
                     // Eliminar CustomerTrackers usando SQL directo
                     var deletedCustomerTrackers = await _context.CustomerTrackers
@@ -657,6 +722,9 @@ namespace ApiWebTrackerGanado.Services
                             .SetProperty(x => x.TrackerId, (int?)null)
                             .SetProperty(x => x.CustomerTrackerId, (int?)null));
 
+                    // Eliminar todas las LocationHistories
+                    await _context.LocationHistories.ExecuteDeleteAsync();
+
                     // Eliminar todos los CustomerTrackers
                     var customerTrackersCount = await _context.CustomerTrackers.CountAsync();
                     await _context.CustomerTrackers.ExecuteDeleteAsync();
@@ -720,5 +788,41 @@ namespace ApiWebTrackerGanado.Services
         public DateTime LastSeen { get; set; }
         public bool IsOnline { get; set; }
         public DateTime AssignedAt { get; set; }
+    }
+
+    /// <summary>
+    /// DTO para animal con información de su tracker (optimizado para consultas masivas)
+    /// </summary>
+    public class AnimalWithTrackerDto
+    {
+        public int AnimalId { get; set; }
+        public string AnimalName { get; set; } = string.Empty;
+        public string? AnimalTag { get; set; }
+        public AnimalTrackerInfoDto? TrackerInfo { get; set; }
+    }
+
+    /// <summary>
+    /// Resultado de asignación masiva de trackers
+    /// </summary>
+    public class BulkAssignResultDto
+    {
+        public bool Success { get; set; }
+        public int AssignedCount { get; set; }
+        public int TotalFreeTrackers { get; set; }
+        public int TotalAnimalsWithoutTracker { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public List<BulkAssignItemDto> Assignments { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Detalle de cada asignación individual en el bulk
+    /// </summary>
+    public class BulkAssignItemDto
+    {
+        public int AnimalId { get; set; }
+        public string AnimalName { get; set; } = string.Empty;
+        public string? AnimalTag { get; set; }
+        public int CustomerTrackerId { get; set; }
+        public string DeviceId { get; set; } = string.Empty;
     }
 }

@@ -23,6 +23,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<Alert>> GetAllAsync()
         {
             return await _context.Alerts
+                .AsNoTracking()
                 .Include(a => a.Animal)
                 .ThenInclude(a => a.Farm)
                 .OrderByDescending(a => a.CreatedAt)
@@ -51,6 +52,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<Alert>> GetFarmAlertsAsync(int farmId, bool onlyActive = true)
         {
             var query = _context.Alerts
+                .AsNoTracking()
                 .Include(a => a.Animal)
                 .ThenInclude(a => a.Farm)
                 .Where(a => a.Animal.FarmId == farmId);
@@ -65,7 +67,7 @@ namespace ApiWebTrackerGanado.Repositories
 
         public async Task<IEnumerable<Alert>> GetAnimalAlertsAsync(int animalId, bool onlyActive = true)
         {
-            var query = _context.Alerts.Where(a => a.AnimalId == animalId);
+            var query = _context.Alerts.AsNoTracking().Where(a => a.AnimalId == animalId);
 
             if (onlyActive)
                 query = query.Where(a => !a.IsResolved);
@@ -78,6 +80,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<Alert>> GetAlertsByTypeAsync(int farmId, string type)
         {
             return await _context.Alerts
+                .AsNoTracking()
                 .Include(a => a.Animal)
                 .Where(a => a.Animal.FarmId == farmId && a.Type == type)
                 .OrderByDescending(a => a.CreatedAt)
@@ -87,6 +90,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<Alert>> GetCriticalAlertsAsync(int farmId)
         {
             return await _context.Alerts
+                .AsNoTracking()
                 .Include(a => a.Animal)
                 .Where(a => a.Animal.FarmId == farmId &&
                            a.Severity == "Critical" &&
@@ -98,7 +102,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<int> GetUnreadAlertsCountAsync(int farmId)
         {
             return await _context.Alerts
-                .Include(a => a.Animal)
+                .AsNoTracking()
                 .CountAsync(a => a.Animal.FarmId == farmId && !a.IsRead && !a.IsResolved);
         }
 
@@ -115,6 +119,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<Alert>> GetActiveAlertsByAnimalAndTypeAsync(int animalId, string type)
         {
             return await _context.Alerts
+                .AsNoTracking()
                 .Where(a => a.AnimalId == animalId &&
                            a.Type == type &&
                            !a.IsResolved)
@@ -124,6 +129,7 @@ namespace ApiWebTrackerGanado.Repositories
         public async Task<IEnumerable<Alert>> GetActiveAlertsByTypeAsync(string type)
         {
             return await _context.Alerts
+                .AsNoTracking()
                 .Include(a => a.Animal)
                     .ThenInclude(a => a.Farm)
                 .Where(a => a.Type == type && !a.IsResolved)

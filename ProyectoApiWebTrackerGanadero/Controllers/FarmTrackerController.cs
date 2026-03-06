@@ -90,27 +90,27 @@ namespace ApiWebTrackerGanado.Controllers
 
                 Console.WriteLine($"[AssignTrackerToAnimal] Using UserId={userId}");
 
-                var success = await _farmTrackerService.AssignTrackerToAnimalAsync(
+                var (success, message) = await _farmTrackerService.AssignTrackerToAnimalAsync(
                     request.CustomerTrackerId,
                     request.AnimalId,
                     userId.Value);
 
-                Console.WriteLine($"[AssignTrackerToAnimal] Assignment result: {success}");
+                Console.WriteLine($"[AssignTrackerToAnimal] Assignment result: success={success}, message={message}");
 
                 if (!success)
                 {
-                    Console.WriteLine($"[AssignTrackerToAnimal] Assignment failed - service returned false");
+                    Console.WriteLine($"[AssignTrackerToAnimal] Assignment failed - {message}");
                     return BadRequest(new
                     {
                         success = false,
-                        message = "No se pudo asignar el tracker al animal. Verifique que ambos le pertenezcan."
+                        message = message
                     });
                 }
 
                 return Ok(new
                 {
                     success = true,
-                    message = "Tracker asignado al animal exitosamente"
+                    message = message
                 });
             }
             catch (Exception ex)
@@ -216,6 +216,71 @@ namespace ApiWebTrackerGanado.Controllers
                     success = false,
                     message = "Error obteniendo información del tracker"
                 });
+            }
+        }
+
+        /// <summary>
+        /// Obtiene todos los animales de una granja con su información de tracker en una sola consulta
+        /// OPTIMIZACIÓN: Elimina el problema N+1 de hacer 120+ requests individuales
+        /// </summary>
+        [HttpGet("farm/{farmId}/animals-with-trackers")]
+        public async Task<IActionResult> GetFarmAnimalsWithTrackers(int farmId)
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+                if (userId == null)
+                {
+                    // Para desarrollo - usar usuario por defecto
+                    userId = 1;
+                }
+
+                var animalsWithTrackers = await _farmTrackerService.GetFarmAnimalsWithTrackersAsync(farmId, userId.Value);
+
+                return Ok(new
+                {
+                    success = true,
+                    farmId = farmId,
+                    animals = animalsWithTrackers,
+                    count = animalsWithTrackers.Count,
+                    message = $"Se obtuvieron {animalsWithTrackers.Count} animales con información de trackers"
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error getting animals with trackers for farm {FarmId}", farmId);
+                return BadRequest(new
+                {
+                    success = false,
+                    message = "Error obteniendo animales con trackers"
+                });
+            }
+        }
+
+        /// <summary>
+        /// Asignación masiva: vincula trackers libres con animales sin tracker en orden numérico
+        /// </summary>
+        [HttpPost("bulk-assign/{farmId}")]
+        public async Task<IActionResult> BulkAssignTrackers(int farmId)
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+                if (userId == null) userId = 1;
+
+                var result = await _farmTrackerService.BulkAssignTrackersAsync(farmId, userId.Value);
+
+                if (!result.Success)
+                {
+                    return BadRequest(result);
+                }
+
+                return Ok(result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error in bulk assign for farm {FarmId}", farmId);
+                return BadRequest(new { Success = false, Message = "Error interno en asignación masiva" });
             }
         }
 

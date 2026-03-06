@@ -232,6 +232,7 @@
     private bool _disposed = false;
     private bool _mapInitialized = false;
     private bool _isTrackingSelectedAnimal = false;
+    private bool _isRefreshing = false; // Re-entrancy guard for auto-refresh
 
     // Route-related state
     private RouteDto? _currentRoute = null;
@@ -285,39 +286,28 @@
     {
         try
         {
-            Console.WriteLine($"🔍 LoadAnimalLocations called - Selected Farm ID: {_selectedFarmId}");
-            Console.WriteLine($"🏠 Available farms: {string.Join(", ", _farms?.Select(f => $"{f.Name} (ID: {f.Id})") ?? new[] {"None"})}");
-
             if (_selectedFarmId.HasValue)
             {
-                var selectedFarm = _farms?.FirstOrDefault(f => f.Id == _selectedFarmId.Value);
-                Console.WriteLine($"🎯 Loading animals for farm {_selectedFarmId.Value} ({selectedFarm?.Name ?? "Unknown"})");
                 _animalLocations = await TrackingService.GetFarmAnimalsLocationsAsync(_selectedFarmId.Value);
-                Console.WriteLine($"✅ Loaded {_animalLocations.Count} animals from farm {_selectedFarmId.Value} ({selectedFarm?.Name ?? "Unknown"})");
             }
             else
             {
-                // Load animals from all farms with a single API call - MUCH FASTER!
-                Console.WriteLine("🌐 Loading animals from all farms (optimized single call)");
                 _animalLocations = await TrackingService.GetAllAnimalsLocationsAsync();
-                Console.WriteLine($"🚀 Loaded {_animalLocations.Count} animals from all farms with single API call");
-            }
-
-            // Debug: Print animal details with farm information
-            foreach (var animal in _animalLocations)
-            {
-                var farmName = _farms?.FirstOrDefault(f => f.Id == animal.FarmId)?.Name ?? "Unknown";
-                Console.WriteLine($"🐄 Animal: {animal.Name} (Farm: {farmName}, ID: {animal.FarmId}), Location: {animal.Location?.Latitude}, {animal.Location?.Longitude}");
             }
 
             _lastUpdate = DateTime.Now;
-            await UpdateMapMarkers();
+
+            // Only update markers if the map is already initialized
+            // Otherwise, InitializeMap() in OnAfterRenderAsync will handle it
+            if (_mapInitialized)
+            {
+                await UpdateMapMarkers();
+            }
             StateHasChanged();
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error loading animal locations: {ex.Message}");
-            Console.WriteLine($"Exception details: {ex}");
         }
     }
 
@@ -389,8 +379,6 @@
     {
         try
         {
-            Console.WriteLine($"UpdateMapMarkers called with {_animalLocations.Count} animals");
-
             var markersData = _animalLocations
                 .Where(a => a.Location != null)
                 .Select(a => new
@@ -412,22 +400,12 @@
                 })
                 .ToArray();
 
-            Console.WriteLine($"Sending {markersData.Length} markers to JavaScript");
-            foreach (var marker in markersData)
-            {
-                Console.WriteLine($"Marker: {marker.name} at {marker.currentLocation.latitude}, {marker.currentLocation.longitude}");
-            }
-
-            // Llamar a la función JavaScript con el parámetro para abrir todos los popups
-            // openAllPopups = true significa que queremos mostrar todos los popups cuando se selecciona una granja
-            bool openAllPopups = !_selectedAnimalId.HasValue; // Solo abrir todos si no hay animal seleccionado
+            bool openAllPopups = !_selectedAnimalId.HasValue;
             await JSRuntime.InvokeVoidAsync("updateMapMarkers", markersData, openAllPopups);
-            Console.WriteLine($"JavaScript updateMapMarkers call completed with openAllPopups={openAllPopups}");
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error updating map markers: {ex.Message}");
-            Console.WriteLine($"Exception details: {ex}");
         }
     }
 
@@ -704,17 +682,26 @@
             // Auto-refresh every 15 seconds for better real-time experience
             _autoRefreshTimer = new Timer(async _ =>
             {
-                if (!_disposed)
+                if (_disposed || _isRefreshing) return;
+
+                _isRefreshing = true;
+                try
                 {
-                    Console.WriteLine("Auto-refresh timer triggered for all farm animals");
                     await InvokeAsync(async () =>
                     {
-                        await LoadAnimalLocations();
+                        if (!_disposed)
+                            await LoadAnimalLocations();
                     });
                 }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Auto-refresh error: {ex.Message}");
+                }
+                finally
+                {
+                    _isRefreshing = false;
+                }
             }, null, TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(15));
-
-            Console.WriteLine("Auto-refresh timer initialized - will update all farm animals every 15 seconds");
         }
         catch (Exception ex)
         {
@@ -1370,7 +1357,11 @@
     public void Dispose()
     {
         _disposed = true;
+        _mapInitialized = false;
+        _isRefreshing = false;
+
         _autoRefreshTimer?.Dispose();
+        _autoRefreshTimer = null;
 
         // Stop selected animal tracking
         StopSelectedAnimalTracking();
@@ -1384,8 +1375,7 @@
         // Clean up map when component is disposed
         try
         {
-            JSRuntime.InvokeVoidAsync("cleanupMap");
-            _mapInitialized = false;
+            _ = JSRuntime.InvokeVoidAsync("cleanupMap");
         }
         catch (Exception ex)
         {
@@ -1658,26 +1648,17 @@
 
     // Clean up existing map
     window.cleanupMap = function() {
-        console.log("cleanupMap called");
-
         try {
             if (map) {
-                console.log("Removing existing map");
                 map.remove();
                 map = null;
             }
-
-            // Clear markers
             markers = {};
-
-            // Clear center marker
             if (window.centerMarker) {
                 window.centerMarker = null;
             }
-
             mapInitialized = false;
-
-            console.log("Map cleanup completed");
+            window.lastMarkerCount = null;
         } catch (error) {
             console.error("Error during map cleanup:", error);
         }
@@ -1685,58 +1666,41 @@
 
     // Force reinitialize map (always creates new map instance)
     window.reinitializeMap = function() {
-        console.log("reinitializeMap called");
-
         // Always clean up first
         window.cleanupMap();
 
         const mapElement = document.getElementById("map");
         if (!mapElement) {
-            console.error("Map element not found - retrying in 500ms");
             setTimeout(() => window.reinitializeMap(), 500);
             return;
         }
 
-        console.log("Map element found, waiting for Leaflet...");
-
         waitForLeaflet(() => {
             try {
-                console.log("Initializing fresh Leaflet map...");
-
-                // Clear the map container content
                 mapElement.innerHTML = '';
 
-                // Initialize new map centered in Entre Ríos, Argentina
                 map = L.map('map', {
                     center: [-33.0167, -58.5167],
-                    zoom: 15,
+                    zoom: 10,
                     zoomControl: true
                 });
 
-                // Add OpenStreetMap base layer
                 const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
                     maxZoom: 19
                 });
 
                 osmLayer.addTo(map);
 
-                // Wait for map to render completely
                 map.whenReady(() => {
-                    console.log("Fresh map is ready and rendered");
                     mapInitialized = true;
-
-                    // Invalidate size to ensure proper rendering
                     setTimeout(() => {
-                        map.invalidateSize();
-                        console.log("Fresh map size invalidated");
+                        if (map) map.invalidateSize();
                     }, 200);
                 });
 
-                console.log("Fresh OpenStreetMap initialized successfully");
-
             } catch (error) {
-                console.error("Error initializing fresh map:", error);
+                console.error("Error initializing map:", error);
                 mapInitialized = false;
             }
         });
@@ -1744,7 +1708,6 @@
 
     // Legacy function for backward compatibility
     window.initializeMap = function() {
-        console.log("initializeMap called - redirecting to reinitializeMap");
         window.reinitializeMap();
     };
 
@@ -1752,51 +1715,45 @@
     let showAllPopups = true;
 
     // Mantener compatibilidad con llamadas anteriores
-    window.updateMapMarkers = function(animalsData, openAllPopups) {
+    window.updateMapMarkers = function(animalsData, openAllPopups, _retryCount) {
         // Si openAllPopups es undefined, establecer por defecto a true
         if (typeof openAllPopups === 'undefined') {
             openAllPopups = true;
         }
-        console.log("updateMapMarkers called with data:", animalsData, "openAllPopups:", openAllPopups);
+        _retryCount = _retryCount || 0;
 
         if (!map || !mapInitialized) {
-            console.warn("Map not ready, retrying in 1 second...");
-            setTimeout(() => window.updateMapMarkers(animalsData, openAllPopups), 1000);
+            if (_retryCount < 5) {
+                setTimeout(() => window.updateMapMarkers(animalsData, openAllPopups, _retryCount + 1), 1000);
+            } else {
+                console.warn("Map not ready after 5 retries, skipping marker update");
+            }
             return;
         }
 
         if (!animalsData || animalsData.length === 0) {
-            console.warn("No animals data provided");
             return;
         }
 
         try {
-            // Limpiar marcadores existentes SOLAMENTE
-            console.log(`Clearing ${Object.keys(markers).length} existing markers`);
+            // Limpiar marcadores existentes
             Object.values(markers).forEach(marker => {
                 map.removeLayer(marker);
             });
             markers = {};
-
-            console.log(`Processing ${animalsData.length} animals`);
 
             // Array para ajustar bounds del mapa
             const markerLatLngs = [];
 
             // Agregar nuevos marcadores
             animalsData.forEach(animal => {
-                console.log("Processing animal:", animal);
-
                 // Verificar que el animal tenga ubicación
                 if (!animal.currentLocation || !animal.currentLocation.latitude || !animal.currentLocation.longitude) {
-                    console.warn("Animal has no location data:", animal);
                     return;
                 }
 
                 const latLng = [animal.currentLocation.latitude, animal.currentLocation.longitude];
                 markerLatLngs.push(latLng);
-
-                console.log(`Adding marker for ${animal.name} at ${latLng}`);
 
                 // Determinar estado de conexión basado en timestamp de la ubicación
                 const now = new Date();
@@ -1900,77 +1857,37 @@
 
                 marker.addTo(map);
                 markers[animal.id] = marker;
-
-                console.log(`✅ Marker successfully added for ${animal.name} (ID: ${animal.id}) with color ${markerColor}`);
             });
 
-            // Ajustar vista del mapa para mostrar todos los marcadores
-            console.log(`📍 MARKER SUMMARY: Created ${markerLatLngs.length} markers from ${animalsData.length} animals`);
-            console.log(`📍 Total markers in collection: ${Object.keys(markers).length}`);
-
             if (markerLatLngs.length > 0) {
-                console.log(`Adjusting map view for ${markerLatLngs.length} markers`);
-
-                // Solo ajustar el zoom en la carga inicial o cuando cambia significativamente el número de markers
+                // Ajustar vista en la carga inicial o cuando cambia el número de markers
                 const isInitialLoad = !window.lastMarkerCount || Math.abs(window.lastMarkerCount - markerLatLngs.length) > 2;
 
                 if (isInitialLoad) {
-                    console.log("📍 Initial load or significant marker change - adjusting zoom");
-
                     if (markerLatLngs.length === 1) {
-                        // Si solo hay un marcador, centrar en él con zoom consistente
-                        map.setView(markerLatLngs[0], 16);
-                        console.log(`Centered map on single marker at ${markerLatLngs[0]}`);
+                        map.setView(markerLatLngs[0], 15);
                     } else {
-                        // Para múltiples marcadores, usar un zoom fijo que permita ver bien la separación
                         const group = new L.featureGroup(Object.values(markers));
                         const bounds = group.getBounds();
-
-                        // Expandir bounds para dar espacio entre markers
-                        const expandedBounds = bounds.pad(0.5);
-
-                        // Usar fitBounds con configuración de zoom original
-                        map.fitBounds(expandedBounds, {
-                            padding: [50, 50],
-                            maxZoom: 13,
-                            minZoom: 11
+                        // fitBounds sin minZoom restrictivo para que muestre TODOS los animales
+                        map.fitBounds(bounds.pad(0.15), {
+                            padding: [30, 30],
+                            maxZoom: 15
                         });
-
-                        console.log(`✅ Initial bounds fitted for ${Object.keys(markers).length} markers with stable zoom`);
                     }
-
-                    // Recordar cuántos markers tenemos
                     window.lastMarkerCount = markerLatLngs.length;
-                } else {
-                    // En actualizaciones regulares, solo actualizar posiciones sin cambiar zoom
-                    console.log("🔄 Regular update - maintaining current zoom level");
 
-                    // Solo centrar suavemente en el área de los markers sin cambiar zoom
-                    if (markerLatLngs.length > 1) {
-                        const group = new L.featureGroup(Object.values(markers));
-                        const bounds = group.getBounds();
-                        const center = bounds.getCenter();
-
-                        // Mover suavemente el centro del mapa sin cambiar zoom
-                        const currentZoom = map.getZoom();
-                        map.setView(center, currentZoom, { animate: true, duration: 1 });
-
-                        console.log(`📍 Gently centered map at ${center.lat}, ${center.lng} with zoom ${currentZoom}`);
-                    }
+                    // Asegurar renderizado correcto en carga inicial
+                    setTimeout(() => {
+                        if (map) map.invalidateSize();
+                    }, 150);
                 }
+                // En auto-refresh NO mover la vista - el usuario puede estar navegando el mapa
 
-                // No abrir automáticamente ningún popup - solo configurar el estado
                 showAllPopups = openAllPopups;
-                console.log(`✅ Map updated with ${Object.keys(markers).length} cow markers (hover to see details)`);
-
-                // Asegurar renderizado correcto
-                setTimeout(() => {
-                    map.invalidateSize();
-                    console.log("✅ Map size invalidated");
-                }, 150);
-            } else {
-                console.warn("⚠️ No valid animal locations found - no markers to display");
             }
+
+            console.log(`Map updated: ${Object.keys(markers).length} markers`);
 
         } catch (error) {
             console.error("Error updating map markers:", error);
@@ -1979,8 +1896,7 @@
 
     // Función para resetear el contador de markers (usado cuando se cambia de granja)
     window.resetMapState = function() {
-        console.log("🔄 Resetting map state for new farm selection");
-        window.lastMarkerCount = null; // Esto forzará un reajuste inicial del zoom
+        window.lastMarkerCount = null;
     };
 
     // Nueva función para mostrar solo un animal específico

@@ -17,8 +17,9 @@ namespace TrackerGanadero.Shared.Services
 
         public static bool SIMULATE_USER_MOVEMENT = true;
 
-        private static double _mockLatitude = -33.0095;
-        private static double _mockLongitude = -58.5173;
+        // Mock location dentro del área de geofencing de Gualeguaychú (emulador_gps_stress_test.py)
+        private static double _mockLatitude = -33.030;
+        private static double _mockLongitude = -60.470;
 
         public static void UpdateMockLocation(double latitude, double longitude)
         {
