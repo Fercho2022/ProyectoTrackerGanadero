@@ -27,6 +27,8 @@ namespace ApiWebTrackerGanado.Data
         public DbSet<Customer> Customers { get; set; }
         public DbSet<License> Licenses { get; set; }
         public DbSet<CustomerTracker> CustomerTrackers { get; set; }
+        public DbSet<NotificationSettings> NotificationSettings { get; set; }
+        public DbSet<AnimalActivityBaseline> AnimalActivityBaselines { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -239,6 +241,26 @@ namespace ApiWebTrackerGanado.Data
                       .IsUnique();
 
                 entity.HasIndex(e => new { e.CustomerId, e.Status });
+            });
+
+            // AnimalActivityBaseline Configuration
+            modelBuilder.Entity<AnimalActivityBaseline>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasOne(e => e.Animal)
+                      .WithMany()
+                      .HasForeignKey(e => e.AnimalId);
+                entity.HasIndex(e => new { e.AnimalId, e.Date }).IsUnique();
+            });
+
+            // NotificationSettings Configuration
+            modelBuilder.Entity<NotificationSettings>(entity =>
+            {
+                entity.HasKey(e => e.Id);
+                entity.HasOne(e => e.User)
+                      .WithOne()
+                      .HasForeignKey<NotificationSettings>(e => e.UserId);
+                entity.HasIndex(e => e.UserId).IsUnique();
             });
         }
     }

@@ -288,18 +288,20 @@ namespace ApiWebTrackerGanado.Services
                 var tracker = animal.Tracker;
                 var isOnline = tracker?.IsOnline ?? false;
 
-                if (isOnline && lastLocations.TryGetValue(animal.Id, out var lastLoc) && lastLoc != null)
+                // Siempre usar coordenadas reales de la ultima ubicacion conocida
+                // para que animales desconectados queden visibles en el mapa (en gris)
+                if (lastLocations.TryGetValue(animal.Id, out var lastLoc) && lastLoc != null)
                 {
                     locationDto = new LocationDto
                     {
                         Latitude = lastLoc.Latitude,
                         Longitude = lastLoc.Longitude,
                         Altitude = lastLoc.Altitude,
-                        Speed = lastLoc.Speed,
-                        ActivityLevel = lastLoc.ActivityLevel,
+                        Speed = isOnline ? lastLoc.Speed : 0.0,
+                        ActivityLevel = isOnline ? lastLoc.ActivityLevel : 0,
                         Temperature = lastLoc.Temperature,
                         Timestamp = lastLoc.Timestamp,
-                        HasSignal = true
+                        HasSignal = isOnline
                     };
                 }
                 else if (tracker != null)
@@ -359,18 +361,20 @@ namespace ApiWebTrackerGanado.Services
                 var tracker = animal.Tracker;
                 var isOnline = tracker?.IsOnline ?? false;
 
-                if (isOnline && lastLocations.TryGetValue(animal.Id, out var lastLoc) && lastLoc != null)
+                // Siempre usar coordenadas reales de la ultima ubicacion conocida
+                // para que animales desconectados queden visibles en el mapa (en gris)
+                if (lastLocations.TryGetValue(animal.Id, out var lastLoc) && lastLoc != null)
                 {
                     locationDto = new LocationDto
                     {
                         Latitude = lastLoc.Latitude,
                         Longitude = lastLoc.Longitude,
                         Altitude = lastLoc.Altitude,
-                        Speed = lastLoc.Speed,
-                        ActivityLevel = lastLoc.ActivityLevel,
+                        Speed = isOnline ? lastLoc.Speed : 0.0,
+                        ActivityLevel = isOnline ? lastLoc.ActivityLevel : 0,
                         Temperature = lastLoc.Temperature,
                         Timestamp = lastLoc.Timestamp,
-                        HasSignal = true
+                        HasSignal = isOnline
                     };
                 }
                 else if (tracker != null)

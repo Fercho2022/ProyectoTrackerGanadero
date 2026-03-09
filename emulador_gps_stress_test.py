@@ -29,7 +29,7 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 # CONFIGURACION - Modificar estos valores segun el modo deseado
 # ============================================================================
 
-MODO = "escenarios"
+MODO = "apagado_gradual"
 # Opciones: "demo", "normal", "escenarios", "stress_test"
 
 API_URL = "http://localhost:5192/api/gps/update"
@@ -66,6 +66,15 @@ PRESETS = {
         "usar_threading": True,
         "stats_cada_ciclos": 5,
         "intervalo_divisor": 2,     # Intervalos reducidos a la mitad
+    },
+    "apagado_gradual": {
+        "num_trackers": 150,
+        "escenarios_activos": False,
+        "intervalo_fijo": None,
+        "usar_threading": True,
+        "stats_cada_ciclos": 10,
+        "tiempo_normal_min": 5,     # Minutos de operacion normal antes de empezar a apagar
+        "apagado_intervalo_seg": 30, # Segundos entre cada apagado de tracker
     },
 }
 
@@ -918,16 +927,70 @@ def ejecutar_sincrono(trackers, toro, stats_globales):
         stats_globales.mostrar(trackers)
 
 
+def shutdown_coordinator(trackers, toro, stop_event):
+    """Thread que apaga trackers gradualmente despues de un tiempo de operacion normal"""
+    tiempo_normal = CONFIG.get("tiempo_normal_min", 10)
+    intervalo_apagado = CONFIG.get("apagado_intervalo_seg", 30)
+
+    print(f"\n  [APAGADO GRADUAL] Operacion normal durante {tiempo_normal} minutos...")
+    print(f"  [APAGADO GRADUAL] Luego se apagara 1 tracker cada {intervalo_apagado} segundos\n")
+
+    # Esperar el tiempo de operacion normal
+    for _ in range(int(tiempo_normal * 60 * 10)):
+        if stop_event.is_set():
+            return
+        time.sleep(0.1)
+
+    print(f"\n{'='*120}")
+    print(f"  [APAGADO GRADUAL] Tiempo de operacion normal finalizado. Comenzando apagado gradual...")
+    print(f"{'='*120}\n")
+
+    # Obtener trackers que no son el toro (apagar vacas primero, toro al final)
+    trackers_para_apagar = [t for t in trackers if not t.es_toro] + [t for t in trackers if t.es_toro]
+    random.shuffle(trackers_para_apagar[:-1])  # Mezclar las vacas, toro queda ultimo
+
+    apagados = 0
+    for tracker in trackers_para_apagar:
+        if stop_event.is_set():
+            return
+
+        tracker.activo = False
+        apagados += 1
+        activos = len(trackers) - apagados
+        tipo = "TORO" if tracker.es_toro else "VACA"
+        print(f"  [APAGADO] {tracker.device_id} ({tipo}) apagado | "
+              f"Activos: {activos}/{len(trackers)} | "
+              f"{datetime.now().strftime('%H:%M:%S')}")
+
+        if activos == 0:
+            print(f"\n{'='*120}")
+            print(f"  [APAGADO GRADUAL] Todos los trackers apagados.")
+            print(f"  [APAGADO GRADUAL] La API deberia detectar la caida masiva en ~5 minutos.")
+            print(f"{'='*120}\n")
+            return
+
+        # Esperar antes de apagar el siguiente
+        for _ in range(int(intervalo_apagado * 10)):
+            if stop_event.is_set():
+                return
+            time.sleep(0.1)
+
+
 def ejecutar_threading(trackers, toro, stats_globales):
-    """Ejecucion con threading (modos normal, escenarios, stress_test)"""
+    """Ejecucion con threading (modos normal, escenarios, stress_test, apagado_gradual)"""
     stop_event = threading.Event()
 
-    print(f"  Lanzando {len(trackers)} threads de trackers + 1 coordinador...")
+    extra_threads = 2 if MODO == "apagado_gradual" else 1
+    print(f"  Lanzando {len(trackers)} threads de trackers + {extra_threads} coordinador(es)...")
 
     try:
-        with ThreadPoolExecutor(max_workers=len(trackers) + 1) as executor:
+        with ThreadPoolExecutor(max_workers=len(trackers) + extra_threads) as executor:
             # Lanzar coordinador
             executor.submit(coordinador, trackers, toro, stats_globales, stop_event)
+
+            # Lanzar coordinador de apagado gradual si corresponde
+            if MODO == "apagado_gradual":
+                executor.submit(shutdown_coordinator, trackers, toro, stop_event)
 
             # Lanzar workers
             futures = []
@@ -968,6 +1031,8 @@ def main():
         print(f"  Intervalo: {CONFIG['intervalo_fijo']}s fijo")
     else:
         print(f"  Intervalos: variables por estado ({min(INTERVALOS_POR_ESTADO.values())}s - {max(INTERVALOS_POR_ESTADO.values())}s)")
+    if MODO == "apagado_gradual":
+        print(f"  Apagado gradual: {CONFIG.get('tiempo_normal_min', 10)} min normal, luego 1 tracker cada {CONFIG.get('apagado_intervalo_seg', 30)}s")
     print("=" * 120)
 
     # Generar trackers

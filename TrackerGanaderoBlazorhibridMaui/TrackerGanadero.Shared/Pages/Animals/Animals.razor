@@ -141,18 +141,29 @@
                                             <td>
                                                 @if (animal.TrackerId.HasValue)
                                                 {
-                                                    <i class="fas fa-satellite-dish text-success" title="Tracker activo"></i>
+                                                    @if (animal.TrackerIsOnline)
+                                                    {
+                                                        <i class="fas fa-satellite-dish text-success" title="Activo"></i>
+                                                    }
+                                                    else
+                                                    {
+                                                        <i class="fas fa-satellite-dish text-danger" title="Sin señal"></i>
+                                                    }
                                                 }
                                                 else
                                                 {
-                                                    <i class="fas fa-times text-danger" title="Sin tracker"></i>
+                                                    <i class="fas fa-times text-muted" title="Sin tracker"></i>
                                                 }
                                             </td>
                                             <td>
                                                 @if (animal.CurrentLocation != null)
                                                 {
-                                                    <small class="text-success">
-                                                        @animal.CurrentLocation.Timestamp.ToString("dd/MM HH:mm")
+                                                    <small class="@(animal.TrackerIsOnline ? "text-success" : "text-danger")">
+                                                        @animal.CurrentLocation.Latitude.ToString("F5"), @animal.CurrentLocation.Longitude.ToString("F5")
+                                                    </small>
+                                                    <br />
+                                                    <small class="text-muted">
+                                                        @animal.CurrentLocation.Timestamp.ToString("dd/MM HH:mm:ss")
                                                     </small>
                                                 }
                                                 else

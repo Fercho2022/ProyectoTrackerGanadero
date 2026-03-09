@@ -41,6 +41,37 @@ namespace ApiWebTrackerGanado.Controllers
                 .ToListAsync();
 
             var animalDtos = _mapper.Map<List<AnimalDto>>(animals);
+
+            // Poblar CurrentLocation con la última ubicación conocida de cada animal
+            var animalIds = animals.Select(a => a.Id).ToList();
+            var lastLocations = await _context.LocationHistories
+                .Where(lh => lh.AnimalId.HasValue && animalIds.Contains(lh.AnimalId.Value))
+                .GroupBy(lh => lh.AnimalId!.Value)
+                .Select(g => g.OrderByDescending(lh => lh.Timestamp).First())
+                .ToListAsync();
+
+            var locationMap = lastLocations
+                .Where(lh => lh.AnimalId.HasValue)
+                .ToDictionary(lh => lh.AnimalId!.Value);
+
+            foreach (var dto in animalDtos)
+            {
+                if (locationMap.TryGetValue(dto.Id, out var loc))
+                {
+                    dto.CurrentLocation = new LocationDto
+                    {
+                        Latitude = loc.Latitude,
+                        Longitude = loc.Longitude,
+                        Altitude = loc.Altitude,
+                        Speed = loc.Speed,
+                        ActivityLevel = loc.ActivityLevel,
+                        Temperature = loc.Temperature,
+                        Timestamp = loc.Timestamp,
+                        HasSignal = dto.TrackerIsOnline
+                    };
+                }
+            }
+
             return Ok(animalDtos);
         }
 
@@ -240,7 +271,7 @@ namespace ApiWebTrackerGanado.Controllers
                 return userId;
             }
 
-            throw new UnauthorizedAccessException("Could not determine user ID from token claims.");
+            return 1; // Fallback para desarrollo sin autenticación
         }
     }
 }

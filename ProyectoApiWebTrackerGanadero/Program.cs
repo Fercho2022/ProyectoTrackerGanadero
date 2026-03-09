@@ -13,14 +13,12 @@ using ApiWebTrackerGanado.Dtos;
 using ApiWebTrackerGanado.Models;
 using ApiWebTrackerGanado.Repositories;
 using ApiWebTrackerGanado.Middleware;
-using Microsoft.OpenApi.Models;
+using Microsoft.OpenApi;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Add services to the container.
 builder.Services.AddControllers();
-
-
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
@@ -33,23 +31,14 @@ builder.Services.AddSwaggerGen(c =>
         Description = "JWT Authorization header using the Bearer scheme. Example: \"Authorization: Bearer {token}\"",
         Name = "Authorization",
         In = ParameterLocation.Header,
-        Type = SecuritySchemeType.ApiKey,
-        Scheme = "Bearer"
+        Type = SecuritySchemeType.Http,
+        BearerFormat = "JWT",
+        Scheme = "bearer"
     });
 
-    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    c.AddSecurityRequirement(document => new()
     {
-        {
-            new OpenApiSecurityScheme
-            {
-                Reference = new OpenApiReference
-                {
-                    Type = ReferenceType.SecurityScheme,
-                    Id = "Bearer"
-                }
-            },
-            new string[] {}
-        }
+        [new OpenApiSecuritySchemeReference("Bearer", document)] = []
     });
 });
 
@@ -78,6 +67,7 @@ builder.Services.AddScoped<IUserRepository, UserRepository>();
 
 // Business Services
 builder.Services.AddScoped<ITrackingService, TrackingService>();
+builder.Services.AddScoped<EmailNotificationService>();
 builder.Services.AddScoped<IAlertService, AlertService>();
 builder.Services.AddScoped<IPastureService, PastureService>();
 

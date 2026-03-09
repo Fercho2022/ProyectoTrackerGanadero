@@ -10,6 +10,7 @@
 @inject AuthService AuthService
 @inject FarmTrackerService FarmTrackerService
 @inject IJSRuntime JSRuntime
+@inject NotificationSettingsService NotificationSettingsService
 @implements IDisposable
 
 <div class="container-fluid">
@@ -89,6 +90,15 @@
                                 {
                                     <span class="badge bg-info ms-1">@_farms.Count</span>
                                 }
+                            </button>
+                        </li>
+
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link @(StateService.ActiveTab == "notifications" ? "active" : "")"
+                                    @onclick="@(async () => await SetActiveTab("notifications"))"
+                                    type="button" role="tab">
+                                <i class="fas fa-bell me-2"></i>
+                                Notificaciones
                             </button>
                         </li>
                     }
@@ -494,6 +504,227 @@
                         </div>
                     }
                 }
+
+                @* ======================== TAB: NOTIFICACIONES ======================== *@
+                @if (StateService.ActiveTab == "notifications")
+                {
+                    <div class="tab-pane fade show active">
+                        <h5 class="mb-4">
+                            <i class="fas fa-bell me-2 text-warning"></i>
+                            Preferencias de Notificaciones
+                        </h5>
+
+                        @if (_notificationSettings == null)
+                        {
+                            <div class="text-center p-4">
+                                <div class="spinner-border text-primary" role="status">
+                                    <span class="visually-hidden">Cargando...</span>
+                                </div>
+                                <p class="mt-2 text-muted">Cargando preferencias...</p>
+                            </div>
+                        }
+                        else
+                        {
+                            <EditForm Model="_notificationSettings" OnValidSubmit="SaveNotificationSettings">
+                                <DataAnnotationsValidator />
+
+                                @* --- Informacion de Contacto --- *@
+                                <div class="card mb-4">
+                                    <div class="card-header bg-primary text-white">
+                                        <h6 class="mb-0"><i class="fas fa-address-book me-2"></i>Informacion de Contacto</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="row">
+                                            <div class="col-md-6 mb-3">
+                                                <label class="form-label fw-bold">Celular / WhatsApp</label>
+                                                <InputText @bind-Value="_notificationSettings.PhoneNumber"
+                                                           class="form-control" placeholder="+54 9 11 1234-5678" />
+                                                <small class="text-muted">Numero con codigo de pais para WhatsApp</small>
+                                            </div>
+                                            <div class="col-md-6 mb-3">
+                                                <label class="form-label fw-bold">Email de Notificaciones</label>
+                                                <InputText @bind-Value="_notificationSettings.NotificationEmail"
+                                                           class="form-control" placeholder="alertas@ejemplo.com" />
+                                                <ValidationMessage For="() => _notificationSettings.NotificationEmail" />
+                                                <small class="text-muted">Dejar vacio para usar el email de tu cuenta</small>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                @* --- Canales de Notificacion --- *@
+                                <div class="card mb-4">
+                                    <div class="card-header bg-info text-white">
+                                        <h6 class="mb-0"><i class="fas fa-paper-plane me-2"></i>Canales de Notificacion</h6>
+                                    </div>
+                                    <div class="card-body">
+                                        <div class="form-check form-switch mb-3">
+                                            <InputCheckbox @bind-Value="_notificationSettings.EnableEmailNotifications"
+                                                           class="form-check-input" id="chkEmail" />
+                                            <label class="form-check-label" for="chkEmail">
+                                                <i class="fas fa-envelope me-1 text-primary"></i>
+                                                Notificaciones por Email
+                                            </label>
+                                        </div>
+                                        <div class="form-check form-switch mb-3">
+                                            <InputCheckbox @bind-Value="_notificationSettings.EnableWhatsAppNotifications"
+                                                           class="form-check-input" id="chkWhatsApp" />
+                                            <label class="form-check-label" for="chkWhatsApp">
+                                                <i class="fab fa-whatsapp me-1 text-success"></i>
+                                                Notificaciones por WhatsApp
+                                            </label>
+                                            <br />
+                                            <small class="text-muted">Requiere configurar la API de WhatsApp Business</small>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                @* --- Tipos de Alerta --- *@
+                                <div class="card mb-4">
+                                    <div class="card-header bg-warning text-dark">
+                                        <h6 class="mb-0"><i class="fas fa-sliders-h me-2"></i>Tipos de Alerta a Recibir</h6>
+                                    </div>
+                                    <div class="card-body">
+
+                                        @* Conectividad *@
+                                        <h6 class="text-primary mb-2"><i class="fas fa-wifi me-1"></i> Conectividad</h6>
+                                        <div class="ms-3 mb-3">
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertNoSignal"
+                                                               class="form-check-input" id="chkNoSignal" />
+                                                <label class="form-check-label" for="chkNoSignal">Sin Senal de Tracker</label>
+                                            </div>
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertWeakSignal"
+                                                               class="form-check-input" id="chkWeakSignal" />
+                                                <label class="form-check-label" for="chkWeakSignal">Senal Debil</label>
+                                            </div>
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertAbruptDisconnection"
+                                                               class="form-check-input" id="chkAbruptDisc" />
+                                                <label class="form-check-label" for="chkAbruptDisc">Desconexion Abrupta</label>
+                                            </div>
+                                        </div>
+
+                                        @* Seguridad *@
+                                        <h6 class="text-danger mb-2"><i class="fas fa-shield-alt me-1"></i> Seguridad</h6>
+                                        <div class="ms-3 mb-3">
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertNightMovement"
+                                                               class="form-check-input" id="chkNight" />
+                                                <label class="form-check-label" for="chkNight">Movimiento Nocturno</label>
+                                            </div>
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertSuddenExit"
+                                                               class="form-check-input" id="chkSuddenExit" />
+                                                <label class="form-check-label" for="chkSuddenExit">Salida Subita del Area</label>
+                                            </div>
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertUnusualSpeed"
+                                                               class="form-check-input" id="chkUnusualSpeed" />
+                                                <label class="form-check-label" for="chkUnusualSpeed">Velocidad Anormal</label>
+                                            </div>
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertTrackerManipulation"
+                                                               class="form-check-input" id="chkManipulation" />
+                                                <label class="form-check-label" for="chkManipulation">Manipulacion de Tracker</label>
+                                            </div>
+                                        </div>
+
+                                        @* Ubicacion *@
+                                        <h6 class="text-warning mb-2"><i class="fas fa-map-marker-alt me-1"></i> Ubicacion y Geofencing</h6>
+                                        <div class="ms-3 mb-3">
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertOutOfBounds"
+                                                               class="form-check-input" id="chkOutOfBounds" />
+                                                <label class="form-check-label" for="chkOutOfBounds">Animal Fuera del Area</label>
+                                            </div>
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertImmobility"
+                                                               class="form-check-input" id="chkImmobility" />
+                                                <label class="form-check-label" for="chkImmobility">Animal Inmovil</label>
+                                            </div>
+                                        </div>
+
+                                        @* Actividad *@
+                                        <h6 class="text-success mb-2"><i class="fas fa-running me-1"></i> Actividad</h6>
+                                        <div class="ms-3 mb-3">
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertLowActivity"
+                                                               class="form-check-input" id="chkLowActivity" />
+                                                <label class="form-check-label" for="chkLowActivity">Baja Actividad</label>
+                                            </div>
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertHighActivity"
+                                                               class="form-check-input" id="chkHighActivity" />
+                                                <label class="form-check-label" for="chkHighActivity">Alta Actividad</label>
+                                            </div>
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertPossibleHeat"
+                                                               class="form-check-input" id="chkHeat" />
+                                                <label class="form-check-label" for="chkHeat">Posible Celo</label>
+                                            </div>
+                                        </div>
+
+                                        @* Bateria *@
+                                        <h6 class="text-info mb-2"><i class="fas fa-battery-half me-1"></i> Bateria</h6>
+                                        <div class="ms-3 mb-3">
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertBatteryLow"
+                                                               class="form-check-input" id="chkBatteryLow" />
+                                                <label class="form-check-label" for="chkBatteryLow">Bateria Baja</label>
+                                            </div>
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertBatteryCritical"
+                                                               class="form-check-input" id="chkBatteryCrit" />
+                                                <label class="form-check-label" for="chkBatteryCrit">Bateria Critica</label>
+                                            </div>
+                                        </div>
+
+                                        @* Hardware *@
+                                        <h6 class="text-secondary mb-2"><i class="fas fa-microchip me-1"></i> Hardware / Precision</h6>
+                                        <div class="ms-3 mb-3">
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertInvalidCoordinates"
+                                                               class="form-check-input" id="chkInvalidCoords" />
+                                                <label class="form-check-label" for="chkInvalidCoords">Coordenadas Invalidas</label>
+                                            </div>
+                                            <div class="form-check mb-2">
+                                                <InputCheckbox @bind-Value="_notificationSettings.AlertLocationJump"
+                                                               class="form-check-input" id="chkLocationJump" />
+                                                <label class="form-check-label" for="chkLocationJump">Salto de Ubicacion</label>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                @* --- Boton Guardar --- *@
+                                <div class="d-flex justify-content-end">
+                                    <button type="submit" class="btn btn-primary btn-lg" disabled="@_isSavingNotifications">
+                                        @if (_isSavingNotifications)
+                                        {
+                                            <span class="spinner-border spinner-border-sm me-2"></span>
+                                            <text>Guardando...</text>
+                                        }
+                                        else
+                                        {
+                                            <i class="fas fa-save me-2"></i>
+                                            <text>Guardar Preferencias</text>
+                                        }
+                                    </button>
+                                </div>
+                            </EditForm>
+
+                            @if (!string.IsNullOrEmpty(_notificationMessage))
+                            {
+                                <div class="alert @(_notificationSuccess ? "alert-success" : "alert-danger") mt-3">
+                                    <i class="fas @(_notificationSuccess ? "fa-check-circle" : "fa-exclamation-circle") me-2"></i>
+                                    @_notificationMessage
+                                </div>
+                            }
+                        }
+                    </div>
+                }
             }
         </div>
     </div>
@@ -570,6 +801,12 @@
     private List<TrackerDiscoveryDto> _unregisteredTrackers = new();
     private bool _loadingTab = false;
 
+    // Notification Settings
+    private NotificationSettingsModel? _notificationSettings;
+    private bool _isSavingNotifications = false;
+    private string? _notificationMessage;
+    private bool _notificationSuccess = false;
+
     // Real-time update timer
     private Timer? _updateTimer;
     private readonly TimeSpan _updateInterval = TimeSpan.FromSeconds(7); // Slightly slower for discovery
@@ -593,6 +830,12 @@
             if (StateService.ActiveTab == "license")
             {
                 StateService.ActiveTab = "my-trackers";
+            }
+
+            // Cargar datos del tab activo si es necesario
+            if (StateService.ActiveTab == "notifications")
+            {
+                await LoadNotificationSettings();
             }
 
             StartAutoUpdate();
@@ -880,6 +1123,10 @@
                 // Reset unregistered trackers when switching to discovery tab
                 _unregisteredTrackers = new List<TrackerDiscoveryDto>();
             }
+            else if (tab == "notifications")
+            {
+                await LoadNotificationSettings();
+            }
         }
         finally
         {
@@ -893,6 +1140,50 @@
     {
         _licenseMessage = null;
         _trackerMessage = null;
+        _notificationMessage = null;
+    }
+
+    private async Task LoadNotificationSettings()
+    {
+        try
+        {
+            _notificationSettings = await NotificationSettingsService.GetSettingsAsync()
+                                    ?? new NotificationSettingsModel();
+        }
+        catch (Exception ex)
+        {
+            _notificationMessage = "Error cargando preferencias de notificacion";
+            _notificationSuccess = false;
+            _notificationSettings = new NotificationSettingsModel();
+        }
+    }
+
+    private async Task SaveNotificationSettings()
+    {
+        if (_notificationSettings == null) return;
+
+        _isSavingNotifications = true;
+        _notificationMessage = null;
+        StateHasChanged();
+
+        try
+        {
+            var success = await NotificationSettingsService.UpdateSettingsAsync(_notificationSettings);
+            _notificationMessage = success
+                ? "Preferencias guardadas correctamente"
+                : "Error al guardar las preferencias";
+            _notificationSuccess = success;
+        }
+        catch (Exception ex)
+        {
+            _notificationMessage = $"Error: {ex.Message}";
+            _notificationSuccess = false;
+        }
+        finally
+        {
+            _isSavingNotifications = false;
+            StateHasChanged();
+        }
     }
 
     private double GetProgressPercentage(int current, int max)

@@ -52,5 +52,6 @@ builder.Services.AddScoped<TrackingService>();
 builder.Services.AddScoped<FarmTrackerService>();
 builder.Services.AddScoped<SettingsStateService>();
 builder.Services.AddScoped<VoiceNavigationService>();
+builder.Services.AddScoped<NotificationSettingsService>();
 
 await builder.Build().RunAsync();

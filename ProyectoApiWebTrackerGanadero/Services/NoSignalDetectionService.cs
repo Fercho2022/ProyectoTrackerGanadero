@@ -8,7 +8,9 @@ using Microsoft.AspNetCore.SignalR;
 using ApiWebTrackerGanado.Hubs;
 using ApiWebTrackerGanado.Dtos;
 using ApiWebTrackerGanado.Models;
-using Microsoft.Extensions.DependencyInjection; // For IServiceScopeFactory
+using ApiWebTrackerGanado.Data;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.EntityFrameworkCore;
 
 namespace ApiWebTrackerGanado.Services
 {
@@ -16,7 +18,8 @@ namespace ApiWebTrackerGanado.Services
     {
         private readonly ILogger<NoSignalDetectionService> _logger;
         private readonly IServiceScopeFactory _serviceScopeFactory;
-        private const int NO_SIGNAL_THRESHOLD_MINUTES = 5; // Keep consistent with TrackingService
+        private const int NO_SIGNAL_THRESHOLD_MINUTES = 5;
+        private const double MASS_DISCONNECT_THRESHOLD_PERCENT = 0.5; // 50% de trackers caen = alerta masiva
 
         public NoSignalDetectionService(ILogger<NoSignalDetectionService> logger, IServiceScopeFactory serviceScopeFactory)
         {
@@ -39,34 +42,50 @@ namespace ApiWebTrackerGanado.Services
                         var trackerRepository = scope.ServiceProvider.GetRequiredService<ITrackerRepository>();
                         var hubContext = scope.ServiceProvider.GetRequiredService<IHubContext<LiveTrackingHub>>();
                         var alertService = scope.ServiceProvider.GetRequiredService<IAlertService>();
+                        var context = scope.ServiceProvider.GetRequiredService<CattleTrackingContext>();
 
-                        // Get all trackers including their associated animal for alerts and SignalR groups
                         var trackers = await trackerRepository.GetAllTrackersWithAnimalsAsync();
+
+                        // Contadores para deteccion de caida masiva
+                        int totalWithAnimals = 0;
+                        int newlyOfflineCount = 0;
+                        var newlyOfflineTrackers = new List<Tracker>();
 
                         foreach (var tracker in trackers)
                         {
-                            if (tracker.Animal == null) continue; // Only process trackers assigned to animals
+                            if (tracker.Animal == null) continue;
+                            totalWithAnimals++;
 
                             var timeSinceLastSeen = DateTime.UtcNow - tracker.LastSeen;
                             bool currentlyHasSignal = timeSinceLastSeen.TotalMinutes <= NO_SIGNAL_THRESHOLD_MINUTES;
 
                             if (!currentlyHasSignal && tracker.IsOnline)
                             {
-                                // Tracker has gone offline
-                                _logger.LogWarning($"Tracker {tracker.DeviceId} (Animal {tracker.Animal.Id}) detected as offline (LastSeen: {tracker.LastSeen}).");
+                                // Tracker ha perdido senal
+                                _logger.LogWarning("Tracker {DeviceId} (Animal {AnimalId}) detected as offline (LastSeen: {LastSeen}).",
+                                    tracker.DeviceId, tracker.Animal.Id, tracker.LastSeen);
                                 tracker.IsOnline = false;
-                                await trackerRepository.UpdateAsync(tracker); // Update in DB
+                                await trackerRepository.UpdateAsync(tracker);
 
-                                // Send SignalR update for no signal
+                                newlyOfflineCount++;
+                                newlyOfflineTrackers.Add(tracker);
+
+                                // Obtener ultima ubicacion real del animal
+                                var lastLocation = await context.LocationHistories
+                                    .Where(lh => lh.AnimalId == tracker.Animal.Id)
+                                    .OrderByDescending(lh => lh.Timestamp)
+                                    .FirstOrDefaultAsync();
+
+                                // Enviar SignalR con coordenadas reales (no 0,0)
                                 var noSignalLocationDto = new LocationDto
                                 {
-                                    Latitude = 0.0, // Placeholder when no signal
-                                    Longitude = 0.0, // Placeholder
-                                    Altitude = 0.0,
+                                    Latitude = lastLocation?.Latitude ?? 0.0,
+                                    Longitude = lastLocation?.Longitude ?? 0.0,
+                                    Altitude = lastLocation?.Altitude ?? 0.0,
                                     Speed = 0.0,
                                     ActivityLevel = 0,
-                                    Temperature = 0.0,
-                                    Timestamp = tracker.LastSeen, // Show last seen time
+                                    Temperature = lastLocation?.Temperature ?? 0.0,
+                                    Timestamp = tracker.LastSeen,
                                     HasSignal = false
                                 };
 
@@ -75,28 +94,33 @@ namespace ApiWebTrackerGanado.Services
                                 await hubContext.Clients.Group($"farm_{tracker.Animal.FarmId}")
                                     .SendAsync("AnimalLocationUpdate", tracker.Animal.Id, noSignalLocationDto);
 
-                                // Trigger no signal alert
-                                await alertService.TriggerNoSignalAlertAsync(tracker.Animal.Id, tracker.Id, "Tracker sin señal: No se han recibido datos recientes.");
+                                // Alerta individual por tracker
+                                await alertService.TriggerNoSignalAlertAsync(tracker.Animal.Id, tracker.Id,
+                                    $"Tracker sin señal: No se han recibido datos en los últimos {NO_SIGNAL_THRESHOLD_MINUTES} minutos.");
                             }
                             else if (currentlyHasSignal && !tracker.IsOnline)
                             {
-                                // Tracker is back online
-                                _logger.LogInformation($"Tracker {tracker.DeviceId} (Animal {tracker.Animal.Id}) is back online (LastSeen: {tracker.LastSeen}).");
+                                // Tracker recupero senal
+                                _logger.LogInformation("Tracker {DeviceId} (Animal {AnimalId}) is back online (LastSeen: {LastSeen}).",
+                                    tracker.DeviceId, tracker.Animal.Id, tracker.LastSeen);
                                 tracker.IsOnline = true;
-                                await trackerRepository.UpdateAsync(tracker); // Update in DB
+                                await trackerRepository.UpdateAsync(tracker);
 
-                                // Send SignalR update for back online
-                                // For accurate position, the client should re-fetch if needed.
-                                // We send a simplified update indicating it's online.
+                                // Obtener ubicacion real para el SignalR de reconexion
+                                var lastLocation = await context.LocationHistories
+                                    .Where(lh => lh.AnimalId == tracker.Animal.Id)
+                                    .OrderByDescending(lh => lh.Timestamp)
+                                    .FirstOrDefaultAsync();
+
                                 var backOnlineLocationDto = new LocationDto
                                 {
-                                    Latitude = 0.0, // The client will likely get the actual last location from a separate API call
-                                    Longitude = 0.0,
-                                    Altitude = 0.0,
-                                    Speed = 0.0,
-                                    ActivityLevel = 0,
-                                    Temperature = 0.0,
-                                    Timestamp = tracker.LastSeen, // Use LastSeen as it's the most recent known data point
+                                    Latitude = lastLocation?.Latitude ?? 0.0,
+                                    Longitude = lastLocation?.Longitude ?? 0.0,
+                                    Altitude = lastLocation?.Altitude ?? 0.0,
+                                    Speed = lastLocation?.Speed ?? 0.0,
+                                    ActivityLevel = lastLocation?.ActivityLevel ?? 0,
+                                    Temperature = lastLocation?.Temperature ?? 0.0,
+                                    Timestamp = tracker.LastSeen,
                                     HasSignal = true
                                 };
 
@@ -105,8 +129,54 @@ namespace ApiWebTrackerGanado.Services
                                 await hubContext.Clients.Group($"farm_{tracker.Animal.FarmId}")
                                     .SendAsync("AnimalLocationUpdate", tracker.Animal.Id, backOnlineLocationDto);
 
-                                // Resolve no signal alert
-                                await alertService.ResolveNoSignalAlertAsync(tracker.Animal.Id, tracker.Id, "El tracker ha recuperado la señal.");
+                                await alertService.ResolveNoSignalAlertAsync(tracker.Animal.Id, tracker.Id,
+                                    "El tracker ha recuperado la señal.");
+                            }
+                        }
+
+                        // Deteccion de caida masiva del sistema de trackers
+                        if (totalWithAnimals > 0 && newlyOfflineCount >= 3 &&
+                            (double)newlyOfflineCount / totalWithAnimals >= MASS_DISCONNECT_THRESHOLD_PERCENT)
+                        {
+                            _logger.LogCritical(
+                                "CAIDA MASIVA DETECTADA: {Count}/{Total} trackers perdieron señal simultaneamente.",
+                                newlyOfflineCount, totalWithAnimals);
+
+                            // Obtener las granjas afectadas para notificar a cada una
+                            var affectedFarmIds = newlyOfflineTrackers
+                                .Where(t => t.Animal != null)
+                                .Select(t => t.Animal!.FarmId)
+                                .Distinct();
+
+                            foreach (var farmId in affectedFarmIds)
+                            {
+                                var trackersInFarm = newlyOfflineTrackers
+                                    .Count(t => t.Animal?.FarmId == farmId);
+
+                                // Broadcast alerta masiva via SignalR a la granja
+                                await hubContext.Clients.Group($"farm_{farmId}")
+                                    .SendAsync("MassDisconnectionAlert", new
+                                    {
+                                        FarmId = farmId,
+                                        DisconnectedCount = trackersInFarm,
+                                        TotalTrackers = totalWithAnimals,
+                                        Timestamp = DateTime.UtcNow,
+                                        Message = $"Caída masiva del sistema: {trackersInFarm} trackers perdieron señal simultáneamente. " +
+                                                  $"Contacte al administrador del sistema."
+                                    });
+
+                                // Crear alerta critica de caida masiva usando el primer animal de la granja
+                                var firstAnimalInFarm = newlyOfflineTrackers
+                                    .FirstOrDefault(t => t.Animal?.FarmId == farmId)?.Animal;
+
+                                if (firstAnimalInFarm != null)
+                                {
+                                    await alertService.CreateMassDisconnectionAlertAsync(
+                                        firstAnimalInFarm.Id,
+                                        $"CAÍDA MASIVA DEL SISTEMA: {trackersInFarm} trackers perdieron señal simultáneamente. " +
+                                        $"Posible fallo en la infraestructura de comunicaciones. " +
+                                        $"Contacte al administrador del sistema.");
+                                }
                             }
                         }
                     }
@@ -116,7 +186,7 @@ namespace ApiWebTrackerGanado.Services
                     _logger.LogError(ex, "Error in No Signal Detection Service.");
                 }
 
-                await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken); // Check every 1 minute
+                await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
             }
 
             _logger.LogInformation("No Signal Detection Service stopped.");

@@ -12,7 +12,8 @@ namespace ApiWebTrackerGanado.Mappings
         {
             // Animal mappings
             CreateMap<Animal, AnimalDto>()
-                .ForMember(dest => dest.CurrentLocation, opt => opt.Ignore());
+                .ForMember(dest => dest.CurrentLocation, opt => opt.Ignore())
+                .ForMember(dest => dest.TrackerIsOnline, opt => opt.MapFrom(src => src.Tracker != null && src.Tracker.IsOnline));
 
             CreateMap<CreateAnimalDto, Animal>()
                 .ForMember(dest => dest.Id, opt => opt.Ignore())

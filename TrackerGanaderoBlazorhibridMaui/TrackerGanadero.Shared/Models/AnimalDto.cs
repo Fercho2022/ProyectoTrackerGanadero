@@ -12,6 +12,7 @@ namespace TrackerGanadero.Shared.Models
         public string Status { get; set; } = string.Empty;
         public int FarmId { get; set; }
         public int? TrackerId { get; set; }
+        public bool TrackerIsOnline { get; set; }
         public LocationDto? CurrentLocation { get; set; }
     }
 }

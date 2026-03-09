@@ -17,5 +17,6 @@ namespace ApiWebTrackerGanado.Interfaces
         Task ResolveAlertAsync(int alertId, string reason);
         Task TriggerNoSignalAlertAsync(int animalId, int trackerId, string message);
         Task ResolveNoSignalAlertAsync(int animalId, int trackerId, string message);
+        Task CreateMassDisconnectionAlertAsync(int animalId, string message);
     }
 }

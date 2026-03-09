@@ -107,6 +107,7 @@ public static class MauiProgram
 		builder.Services.AddSingleton<FarmTrackerService>();
 		builder.Services.AddSingleton<SettingsStateService>();
 		builder.Services.AddSingleton<VoiceNavigationService>();
+		builder.Services.AddSingleton<NotificationSettingsService>();
 
 		return builder.Build();
 	}

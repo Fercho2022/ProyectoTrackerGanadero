@@ -11,5 +11,6 @@ namespace TrackerGanadero.Shared.Models
         public double Altitude { get; set; }
         public int ActivityLevel { get; set; }
         public double Temperature { get; set; }
+        public bool HasSignal { get; set; } = true;
     }
 }

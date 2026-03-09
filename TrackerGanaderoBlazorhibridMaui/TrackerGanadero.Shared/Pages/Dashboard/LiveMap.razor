@@ -56,6 +56,32 @@
         </div>
     </div>
 
+    <!-- Connection Status Bar -->
+    @if (_animalLocations.Any())
+    {
+        <div class="row mb-2">
+            <div class="col-12">
+                <div class="d-flex gap-3 align-items-center flex-wrap">
+                    <span class="badge bg-success py-2 px-3" style="font-size: 0.85rem;">
+                        <i class="fas fa-signal me-1"></i>
+                        @ConnectedAnimalCount Conectados
+                    </span>
+                    @if (DisconnectedAnimalCount > 0)
+                    {
+                        <span class="badge bg-secondary py-2 px-3" style="font-size: 0.85rem;">
+                            <i class="fas fa-exclamation-triangle me-1"></i>
+                            @DisconnectedAnimalCount Desconectado@(DisconnectedAnimalCount > 1 ? "s" : "")
+                        </span>
+                    }
+                    <small class="text-muted ms-auto">
+                        <i class="fas fa-clock me-1"></i>
+                        Ultima actualizacion: @(_lastUpdate?.ToString("HH:mm:ss") ?? "N/A")
+                    </small>
+                </div>
+            </div>
+        </div>
+    }
+
     <!-- Map Container -->
     <div class="row">
         <div class="col-lg-9">
@@ -365,6 +391,10 @@
             // Force map re-initialization on each call
             await JSRuntime.InvokeVoidAsync("reinitializeMap");
 
+            // Give the map container time to render in the DOM
+            await Task.Delay(300);
+            await JSRuntime.InvokeVoidAsync("eval", "if (map) map.invalidateSize();");
+
             _mapInitialized = true;
             await UpdateMapMarkers();
         }
@@ -660,9 +690,10 @@
     {
         if (animal.Location == null) return false;
 
-        // Considera conectado si las coordenadas se actualizaron en los últimos 2 minutos
+        // Considera conectado si las coordenadas se actualizaron en los últimos 10 minutos
+        // (coincide con el threshold de 10min del lado JavaScript)
         var timeDifference = DateTime.UtcNow - animal.Location.Timestamp.ToUniversalTime();
-        return timeDifference.TotalMinutes <= 2;
+        return timeDifference.TotalMinutes <= 10;
     }
 
     private string GetConnectionStatus(AnimalLocationDto animal)
@@ -674,6 +705,9 @@
     {
         return IsAnimalConnected(animal) ? "success" : "danger";
     }
+
+    private int ConnectedAnimalCount => _animalLocations.Count(a => IsAnimalConnected(a));
+    private int DisconnectedAnimalCount => _animalLocations.Count(a => !IsAnimalConnected(a));
 
     private void InitializeAutoRefresh()
     {
@@ -1426,6 +1460,13 @@
         100% { transform: scale(1); }
     }
 
+    .cow-marker-disconnected {
+        position: relative;
+        display: inline-block;
+        opacity: 0.65;
+        filter: grayscale(30%);
+    }
+
 
     .coordinates-display {
         font-family: 'Courier New', monospace;
@@ -1747,8 +1788,9 @@
 
             // Agregar nuevos marcadores
             animalsData.forEach(animal => {
-                // Verificar que el animal tenga ubicación
-                if (!animal.currentLocation || !animal.currentLocation.latitude || !animal.currentLocation.longitude) {
+                // Verificar que el animal tenga ubicación valida (usar != null en vez de ! para no filtrar coordenada 0)
+                if (!animal.currentLocation || (animal.currentLocation.latitude == null && animal.currentLocation.longitude == null) ||
+                    (animal.currentLocation.latitude === 0 && animal.currentLocation.longitude === 0)) {
                     return;
                 }
 
@@ -1782,11 +1824,12 @@
                 }
 
                 // Crear icono de vaca personalizado
+                const markerClass = isConnected ? 'cow-marker-with-pulse' : 'cow-marker-disconnected';
                 const cowIcon = L.divIcon({
                     html: `
-                        <div class="cow-marker-with-pulse" style="
+                        <div class="${markerClass}" style="
                             background-color: ${markerColor};
-                            border: 3px solid #fff;
+                            border: 3px solid ${isConnected ? '#fff' : '#adb5bd'};
                             border-radius: 50%;
                             width: 35px;
                             height: 35px;
@@ -1794,7 +1837,7 @@
                             align-items: center;
                             justify-content: center;
                             font-size: 18px;
-                            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+                            box-shadow: 0 2px 8px rgba(0,0,0,${isConnected ? '0.3' : '0.15'});
                             cursor: pointer;
                         ">
                             🐄

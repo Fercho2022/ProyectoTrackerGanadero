@@ -27,8 +27,7 @@ class Program
                 {
                     UserId = 1, // Assuming user with ID 1 exists
                     CompanyName = "Test Company",
-                    ContactEmail = "test@company.com",
-                    ContactPhone = "123-456-7890",
+                    Phone = "123-456-7890",
                     Address = "Test Address 123",
                     Status = "Active"
                 };
