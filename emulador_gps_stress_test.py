@@ -29,8 +29,8 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 # CONFIGURACION - Modificar estos valores segun el modo deseado
 # ============================================================================
 
-MODO = "apagado_gradual"
-# Opciones: "demo", "normal", "escenarios", "stress_test"
+MODO = "celo_test_1"
+# Opciones: "demo", "normal", "escenarios", "stress_test", "apagado_gradual", "celo_test_1"
 
 API_URL = "http://localhost:5192/api/gps/update"
 CAMPO_NOMBRE = "La Esperanza"
@@ -76,6 +76,16 @@ PRESETS = {
         "tiempo_normal_min": 5,     # Minutos de operacion normal antes de empezar a apagar
         "apagado_intervalo_seg": 30, # Segundos entre cada apagado de tracker
     },
+    "celo_test_1": {
+        "num_trackers": 150,
+        "escenarios_activos": False,  # Controlado manualmente por celo_coordinator
+        "intervalo_fijo": None,
+        "usar_threading": True,
+        "stats_cada_ciclos": 10,
+        "fase_normal_min": 5,         # Minutos de actividad normal (baseline)
+        "num_vacas_celo": 3,          # Cantidad de vacas que entran en celo
+        "fase_celo_min": 10,          # Minutos de fase celo activo
+    },
 }
 
 CONFIG = PRESETS[MODO]
@@ -114,15 +124,11 @@ DURACION_CELO = (50, 100)
 # ============================================================================
 
 GEOFENCE_POLYGON = [
-    (-33.011773, -60.499933), (-33.015062, -60.496380), (-33.021683, -60.492172), (-33.026569, -60.488480),
-    (-33.031463, -60.484788), (-33.036773, -60.482370), (-33.042097, -60.482542), (-33.048717, -60.485976),
-    (-33.056918, -60.486234), (-33.061881, -60.483658), (-33.068139, -60.477647), (-33.074541, -60.470692),
-    (-33.079216, -60.464510), (-33.081373, -60.459787), (-33.082955, -60.452488), (-33.081948, -60.444846),
-    (-33.079935, -60.440295), (-33.076698, -60.434628), (-33.070801, -60.432396), (-33.064831, -60.432138),
-    (-33.061932, -60.432034), (-33.059306, -60.429887), (-33.057605, -60.428062), (-33.030772, -60.435587),
-    (-33.013932, -60.447093), (-32.997233, -60.459801), (-32.985138, -60.471307), (-32.979523, -60.486248),
-    (-32.978371, -60.500674), (-32.979523, -60.508573), (-32.981827, -60.515443), (-32.991618, -60.515271),
-    (-33.000429, -60.511664), (-33.006187, -60.506512)
+    (-33.059810, -60.485645), (-33.044702, -60.483584), (-33.028642, -60.486746), (-33.008779, -60.503404),
+    (-32.997118, -60.485372), (-33.001149, -60.476099), (-33.016696, -60.467684), (-33.022021, -60.460986),
+    (-33.028930, -60.453087), (-33.042745, -60.443641), (-33.051235, -60.439863), (-33.059148, -60.430761),
+    (-33.064039, -60.432135), (-33.074253, -60.433337), (-33.081733, -60.445702), (-33.082883, -60.455319),
+    (-33.079863, -60.464249), (-33.068643, -60.477301),
 ]
 
 LAT_MIN = min(p[0] for p in GEOFENCE_POLYGON)
@@ -305,7 +311,7 @@ class TrackerEmulado:
 
         # Probabilidad de escape (generar alertas de geofencing)
         esta_dentro = is_point_in_polygon(lat_actual, lon_actual, GEOFENCE_POLYGON)
-        prob_escape = 0.15 if self.estado == "alerta" else 0.08
+        prob_escape = 0.05 if self.estado == "alerta" else 0.01
         intentar_escape = random.random() < prob_escape
 
         # Si esta fuera, intentar volver
@@ -976,11 +982,146 @@ def shutdown_coordinator(trackers, toro, stop_event):
             time.sleep(0.1)
 
 
+def celo_coordinator(trackers, toro, stop_event):
+    """
+    Coordinador de test de celo (patron Gemini).
+    Fase 1: Operacion normal → construye baseline de actividad
+    Fase 2: Activa celo en N vacas → genera movimiento anomalo
+    El backend detecta la anomalia y genera alerta PossibleHeat.
+    """
+    fase_normal = CONFIG.get("fase_normal_min", 5)
+    num_vacas_celo = CONFIG.get("num_vacas_celo", 3)
+    fase_celo = CONFIG.get("fase_celo_min", 10)
+    api_base = API_URL.replace("/api/gps/update", "")
+
+    print(f"\n{'='*120}")
+    print(f"  [CELO TEST] Modo de prueba de deteccion de celo (patron Gemini)")
+    print(f"  [CELO TEST] Fase 1: {fase_normal} min de operacion normal (baseline)")
+    print(f"  [CELO TEST] Fase 2: {fase_celo} min con {num_vacas_celo} vacas en celo")
+    print(f"{'='*120}\n")
+
+    # Esperar 30 segundos para que los trackers envien sus primeros datos
+    print(f"  [CELO TEST] Esperando 30s para inicio de transmision GPS...")
+    for _ in range(300):
+        if stop_event.is_set():
+            return
+        time.sleep(0.1)
+
+    # === PASO 1: Inyectar baselines de prueba (7 dias de historial normal) ===
+    print(f"\n  [CELO TEST] Inyectando 7 dias de baselines de prueba en la BD...")
+    try:
+        # Obtener farmId (asumimos farmId=1 para pruebas)
+        resp = requests.post(f"{api_base}/api/breeding/seed-test-baselines/1", timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            print(f"  [CELO TEST] OK: {data.get('recordsCreated', '?')} baselines creados "
+                  f"para {data.get('animalsProcessed', '?')} animales")
+        else:
+            print(f"  [CELO TEST] ADVERTENCIA: seed-test-baselines retorno {resp.status_code}")
+    except Exception as e:
+        print(f"  [CELO TEST] ERROR al inyectar baselines: {e}")
+
+    # === FASE 1: Operacion normal ===
+    print(f"\n  [CELO TEST] === FASE 1: Operacion normal ({fase_normal} min) ===")
+    for minuto in range(fase_normal):
+        if stop_event.is_set():
+            return
+        restante = fase_normal - minuto
+        print(f"  [CELO TEST] Fase 1 - {restante} min restantes | "
+              f"Todas las vacas en movimiento normal | "
+              f"{datetime.now().strftime('%H:%M:%S')}")
+        for _ in range(600):  # 60 seconds
+            if stop_event.is_set():
+                return
+            time.sleep(0.1)
+
+    # === FASE 2: Activar celo ===
+    print(f"\n{'='*120}")
+    print(f"  [CELO TEST] === FASE 2: Activando celo en {num_vacas_celo} vacas ===")
+    print(f"{'='*120}\n")
+
+    # Seleccionar vacas aleatorias (no toro)
+    vacas_disponibles = [t for t in trackers if not t.es_toro and t.activo]
+    random.shuffle(vacas_disponibles)
+    vacas_en_celo = vacas_disponibles[:num_vacas_celo]
+
+    for vaca in vacas_en_celo:
+        vaca.escenario = "celo"
+        vaca.escenario_ciclos = 9999  # No se acaba hasta que termine la fase
+        vaca.escenario_datos = {}
+        print(f"  [CELO] {vaca.device_id} ({vaca.nombre}) → EN CELO | "
+              f"Se acercara al toro y movimiento amplificado 3x")
+
+    if toro:
+        print(f"  [CELO] Toro: {toro.device_id} en ({toro.lat:.5f}, {toro.lon:.5f})")
+
+    # Monitorear fase de celo
+    for minuto in range(fase_celo):
+        if stop_event.is_set():
+            return
+        restante = fase_celo - minuto
+
+        # Mostrar distancia de cada vaca en celo al toro
+        if toro:
+            for vaca in vacas_en_celo:
+                dist = distancia_entre_puntos(vaca.lat, vaca.lon, toro.lat, toro.lon)
+                print(f"  [CELO] {vaca.device_id} → Distancia al toro: {dist:.0f}m | "
+                      f"Pos: ({vaca.lat:.5f}, {vaca.lon:.5f})")
+
+        print(f"  [CELO TEST] Fase 2 - {restante} min restantes | "
+              f"{datetime.now().strftime('%H:%M:%S')}")
+
+        # A mitad de la fase celo, forzar analisis
+        if minuto == fase_celo // 2:
+            print(f"\n  [CELO TEST] Forzando analisis de celo en el backend...")
+            try:
+                resp = requests.post(f"{api_base}/api/breeding/analyze-now/1", timeout=30)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    print(f"  [CELO TEST] Analisis completado: {data.get('animalsAnalyzed', '?')} "
+                          f"animales analizados")
+                else:
+                    print(f"  [CELO TEST] ADVERTENCIA: analyze-now retorno {resp.status_code}")
+            except Exception as e:
+                print(f"  [CELO TEST] ERROR al forzar analisis: {e}")
+
+        for _ in range(600):  # 60 seconds
+            if stop_event.is_set():
+                return
+            time.sleep(0.1)
+
+    # Forzar analisis final
+    print(f"\n  [CELO TEST] Forzando analisis final de celo...")
+    try:
+        resp = requests.post(f"{api_base}/api/breeding/analyze-now/1", timeout=30)
+        if resp.status_code == 200:
+            data = resp.json()
+            print(f"  [CELO TEST] Analisis final completado: {data.get('animalsAnalyzed', '?')} animales")
+        else:
+            print(f"  [CELO TEST] analyze-now retorno {resp.status_code}")
+    except Exception as e:
+        print(f"  [CELO TEST] ERROR: {e}")
+
+    # Desactivar celo
+    for vaca in vacas_en_celo:
+        vaca.escenario = None
+        vaca.escenario_ciclos = 0
+        vaca.escenario_datos = {}
+
+    print(f"\n{'='*120}")
+    print(f"  [CELO TEST] Test de celo finalizado.")
+    print(f"  [CELO TEST] Si las alertas fueron generadas, verificar en:")
+    print(f"  [CELO TEST]   - Pagina de Alertas de la app")
+    print(f"  [CELO TEST]   - Correo electronico ({num_vacas_celo} alertas esperadas)")
+    print(f"  [CELO TEST] Los trackers continuan en operacion normal.")
+    print(f"{'='*120}\n")
+
+
 def ejecutar_threading(trackers, toro, stats_globales):
-    """Ejecucion con threading (modos normal, escenarios, stress_test, apagado_gradual)"""
+    """Ejecucion con threading (modos normal, escenarios, stress_test, apagado_gradual, celo_test_1)"""
     stop_event = threading.Event()
 
-    extra_threads = 2 if MODO == "apagado_gradual" else 1
+    extra_threads = 2 if MODO in ("apagado_gradual", "celo_test_1") else 1
     print(f"  Lanzando {len(trackers)} threads de trackers + {extra_threads} coordinador(es)...")
 
     try:
@@ -991,6 +1132,10 @@ def ejecutar_threading(trackers, toro, stats_globales):
             # Lanzar coordinador de apagado gradual si corresponde
             if MODO == "apagado_gradual":
                 executor.submit(shutdown_coordinator, trackers, toro, stop_event)
+
+            # Lanzar coordinador de test de celo si corresponde
+            if MODO == "celo_test_1":
+                executor.submit(celo_coordinator, trackers, toro, stop_event)
 
             # Lanzar workers
             futures = []
@@ -1033,6 +1178,10 @@ def main():
         print(f"  Intervalos: variables por estado ({min(INTERVALOS_POR_ESTADO.values())}s - {max(INTERVALOS_POR_ESTADO.values())}s)")
     if MODO == "apagado_gradual":
         print(f"  Apagado gradual: {CONFIG.get('tiempo_normal_min', 10)} min normal, luego 1 tracker cada {CONFIG.get('apagado_intervalo_seg', 30)}s")
+    if MODO == "celo_test_1":
+        print(f"  Test de celo: Fase 1 ({CONFIG.get('fase_normal_min', 5)} min normal) → "
+              f"Fase 2 ({CONFIG.get('fase_celo_min', 10)} min con {CONFIG.get('num_vacas_celo', 3)} vacas en celo)")
+        print(f"  Inyecta baselines + fuerza analisis automaticamente")
     print("=" * 120)
 
     # Generar trackers

@@ -129,7 +129,7 @@
                                             <td>@animal.Breed</td>
                                             <td>
                                                 <i class="fas @(animal.Gender.ToLower() == "male" ? "fa-mars text-primary" : "fa-venus text-danger")"></i>
-                                                @animal.Gender
+                                                @(string.IsNullOrEmpty(animal.Category) ? (animal.Gender == "Male" ? "Macho" : "Hembra") : animal.Category)
                                             </td>
                                             <td>@GetAge(animal.BirthDate)</td>
                                             <td>@animal.Weight.ToString("F1") kg</td>
@@ -261,11 +261,28 @@
                     <div class="row">
                         <div class="col-md-6">
                             <div class="mb-3">
+                                <label class="form-label">Categoría</label>
+                                <InputSelect class="form-select" @bind-Value="_animalForm.Category">
+                                    <option value="">Seleccionar categoría</option>
+                                    <option value="Toro">Toro</option>
+                                    <option value="Vaca">Vaca</option>
+                                    <option value="Novillo">Novillo</option>
+                                    <option value="Vaquillona">Vaquillona</option>
+                                    <option value="Ternero">Ternero</option>
+                                    <option value="Ternera">Ternera</option>
+                                </InputSelect>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="mb-3">
                                 <label class="form-label">Fecha de Nacimiento *</label>
                                 <InputDate class="form-control" @bind-Value="_animalForm.BirthDate" />
                                 <ValidationMessage For="@(() => _animalForm.BirthDate)" />
                             </div>
                         </div>
+                    </div>
+
+                    <div class="row">
                         <div class="col-md-6">
                             <div class="mb-3">
                                 <label class="form-label">Peso (kg) *</label>
@@ -482,6 +499,7 @@
             Tag = animal.Tag,
             BirthDate = animal.BirthDate,
             Gender = animal.Gender,
+            Category = animal.Category,
             Breed = animal.Breed,
             Weight = animal.Weight,
             Status = animal.Status,

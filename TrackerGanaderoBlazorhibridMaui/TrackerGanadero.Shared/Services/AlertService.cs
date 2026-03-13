@@ -63,6 +63,34 @@ namespace TrackerGanadero.Shared.Services
             }
         }
 
+        public async Task<int> ResolveAlertsBySeverityAsync(string severity)
+        {
+            try
+            {
+                var result = await _httpService.PutAsync<int>($"api/alerts/resolve-by-severity/{severity}", new { });
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error resolving alerts by severity {Severity}", severity);
+                throw;
+            }
+        }
+
+        public async Task<int> ResolveAlertsByTypeAsync(string type)
+        {
+            try
+            {
+                var result = await _httpService.PutAsync<int>($"api/alerts/resolve-by-type/{type}", new { });
+                return result;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error resolving alerts by type {Type}", type);
+                throw;
+            }
+        }
+
         public async Task<List<AlertDto>> GetActiveAlertsAsync()
         {
             return await GetAlertsAsync(isResolved: false);

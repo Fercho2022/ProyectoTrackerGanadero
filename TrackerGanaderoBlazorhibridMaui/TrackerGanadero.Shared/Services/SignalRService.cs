@@ -169,6 +169,8 @@ namespace TrackerGanadero.Shared.Services
         public int FarmId { get; set; }
         public int? TrackerId { get; set; }
         public string Status { get; set; } = "Healthy";
+        public string Gender { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
 
         // Properties for compatibility with the UI
         public int AnimalId => Id;

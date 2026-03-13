@@ -77,8 +77,8 @@ namespace ApiWebTrackerGanado.Services.BackgroundServices
                     _logger.LogError(ex, "Error occurred during breeding analysis");
                 }
 
-                // Ejecutar cada 4 horas (el CheckBreedingAlertsAsync tiene logica interna
-                // para no duplicar baselines del mismo dia gracias al indice unico AnimalId+Date)
+                // Ejecutar cada 4 horas en produccion
+                // Para testing rapido con emulador celo_test_1, cambiar a: TimeSpan.FromMinutes(2)
                 await Task.Delay(TimeSpan.FromHours(4), stoppingToken);
             }
         }

@@ -34,6 +34,11 @@ namespace ApiWebTrackerGanado.Dtos
 
         public DateTime Timestamp { get; set; } = DateTime.UtcNow;
 
+        /// <summary>
+        /// Tipo de posicionamiento: GPS (real), LBS (torre celular, aproximado), WIFI, EMU (emulador)
+        /// </summary>
+        public string LocationType { get; set; } = "GPS";
+
         public string? Source { get; set; } = "Frontend"; // Para identificar que viene del frontend
     }
 }

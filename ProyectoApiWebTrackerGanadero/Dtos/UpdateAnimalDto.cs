@@ -10,6 +10,7 @@ namespace ApiWebTrackerGanado.Dtos
         public DateTime BirthDate { get; set; }
         [Required]
         public string Gender { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
         [Required]
         public string Breed { get; set; } = string.Empty;
         public decimal Weight { get; set; }

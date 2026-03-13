@@ -20,6 +20,12 @@ namespace ApiWebTrackerGanado.Models
         [StringLength(20)]
         public string Gender { get; set; } = string.Empty;
 
+        /// <summary>
+        /// Categoria del animal: Toro, Vaca, Novillo, Vaquillona, Ternero, Ternera
+        /// </summary>
+        [StringLength(30)]
+        public string Category { get; set; } = string.Empty;
+
         [StringLength(50)]
         public string Breed { get; set; } = string.Empty;
 

@@ -122,7 +122,8 @@ namespace ApiWebTrackerGanado.Controllers
                             Timestamp = timestamp,
                             ActivityLevel = CalculateActivityLevel(request.Speed ?? 0),
                             Temperature = request.InternalTemperature ?? 0,
-                            SignalStrength = request.SignalStrength ?? 0
+                            SignalStrength = request.SignalStrength ?? 0,
+                            LocationType = "EMU"
                         };
 
                         _context.LocationHistories.Add(locationHistory);

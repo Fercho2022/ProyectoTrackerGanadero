@@ -124,6 +124,8 @@ namespace TrackerGanadero.Shared.Services
         [Required(ErrorMessage = "El género es requerido")]
         public string Gender { get; set; } = string.Empty;
 
+        public string Category { get; set; } = string.Empty;
+
         [Required(ErrorMessage = "La raza es requerida")]
         public string Breed { get; set; } = string.Empty;
 

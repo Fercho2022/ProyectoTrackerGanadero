@@ -35,6 +35,12 @@ namespace ApiWebTrackerGanado.Models
 
         public int SignalStrength { get; set; }
 
+        /// <summary>
+        /// Tipo de posicionamiento: GPS (real), LBS (torre celular, aproximado), WIFI, EMU (emulador)
+        /// </summary>
+        [System.ComponentModel.DataAnnotations.StringLength(10)]
+        public string LocationType { get; set; } = "GPS";
+
         public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     }
 }

@@ -24,44 +24,43 @@ namespace ApiWebTrackerGanado.Controllers
         }
 
         [HttpGet]
-        public async Task<ActionResult<IEnumerable<AlertDto>>> GetAllAlerts([FromQuery] bool? isResolved = null)
+        public async Task<ActionResult<IEnumerable<AlertDto>>> GetAllAlerts([FromQuery] bool? isResolved = null, [FromQuery] int limit = 500)
         {
             try
             {
                 // SECURITY FIX: Filter alerts by current user's farms
                 var userId = GetCurrentUserId();
 
-                // Build query with all filters pushed to DB
+                // Build query with projection pushed to DB (no Include needed)
                 var query = _context.Alerts
                     .AsNoTracking()
-                    .Include(a => a.Animal)
-                        .ThenInclude(an => an.Farm)
                     .Where(a => a.Animal.Farm.UserId == userId);
 
-                // Push isResolved filter to DB instead of filtering in-memory
+                // Push isResolved filter to DB
                 if (isResolved.HasValue)
                     query = query.Where(a => a.IsResolved == isResolved.Value);
 
-                var alerts = await query
+                // Project directly in the DB query - avoids loading full entities
+                var alertDtos = await query
                     .OrderByDescending(a => a.CreatedAt)
+                    .Take(limit)
+                    .Select(a => new AlertDto
+                    {
+                        Id = a.Id,
+                        Type = a.Type,
+                        Title = GetAlertTitle(a.Type, a.Severity),
+                        Severity = a.Severity,
+                        Message = a.Message,
+                        AnimalId = a.AnimalId,
+                        FarmId = a.Animal.FarmId,
+                        AnimalName = a.Animal.Name ?? "N/A",
+                        FarmName = a.Animal.Farm.Name,
+                        IsRead = a.IsRead,
+                        IsResolved = a.IsResolved,
+                        CreatedAt = a.CreatedAt,
+                        ResolvedAt = a.ResolvedAt
+                    })
                     .ToListAsync();
-
-                var alertDtos = alerts.Select(a => new AlertDto
-                {
-                    Id = a.Id,
-                    Type = a.Type,
-                    Title = GetAlertTitle(a.Type, a.Severity),
-                    Severity = a.Severity,
-                    Message = a.Message,
-                    AnimalId = a.AnimalId,
-                    FarmId = a.Animal?.FarmId,
-                    AnimalName = a.Animal?.Name ?? "N/A",
-                    FarmName = a.Animal?.Farm?.Name,
-                    IsRead = a.IsRead,
-                    IsResolved = a.IsResolved,
-                    CreatedAt = a.CreatedAt,
-                    ResolvedAt = a.ResolvedAt
-                });
 
                 return Ok(alertDtos);
             }
@@ -220,6 +219,76 @@ namespace ApiWebTrackerGanado.Controllers
             catch (Exception ex)
             {
                 return BadRequest(new { message = $"Error resolving alert: {ex.Message}" });
+            }
+        }
+
+        [HttpPut("resolve-by-severity/{severity}")]
+        public async Task<ActionResult<int>> ResolveAlertsBySeverity(string severity)
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+
+                var alertsToResolve = await _context.Alerts
+                    .Where(a => !a.IsResolved
+                        && a.Severity.ToLower() == severity.ToLower()
+                        && a.Animal.Farm.UserId == userId)
+                    .ToListAsync();
+
+                if (!alertsToResolve.Any())
+                    return Ok(0);
+
+                foreach (var alert in alertsToResolve)
+                {
+                    alert.IsResolved = true;
+                    alert.ResolvedAt = DateTime.UtcNow;
+                }
+
+                await _context.SaveChangesAsync();
+                return Ok(alertsToResolve.Count);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = $"Error resolving alerts by severity: {ex.Message}" });
+            }
+        }
+
+        [HttpPut("resolve-by-type/{type}")]
+        public async Task<ActionResult<int>> ResolveAlertsByType(string type)
+        {
+            try
+            {
+                var userId = GetCurrentUserId();
+
+                var alertsToResolve = await _context.Alerts
+                    .Where(a => !a.IsResolved
+                        && a.Type.ToLower() == type.ToLower()
+                        && a.Animal.Farm.UserId == userId)
+                    .ToListAsync();
+
+                if (!alertsToResolve.Any())
+                    return Ok(0);
+
+                foreach (var alert in alertsToResolve)
+                {
+                    alert.IsResolved = true;
+                    alert.ResolvedAt = DateTime.UtcNow;
+                }
+
+                await _context.SaveChangesAsync();
+                return Ok(alertsToResolve.Count);
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                return Unauthorized(new { message = ex.Message });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { message = $"Error resolving alerts by type: {ex.Message}" });
             }
         }
 

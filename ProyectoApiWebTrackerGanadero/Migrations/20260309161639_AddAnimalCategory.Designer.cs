@@ -3,6 +3,7 @@ using System;
 using ApiWebTrackerGanado.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using NetTopologySuite.Geometries;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
@@ -12,9 +13,11 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace ApiWebTrackerGanado.Migrations
 {
     [DbContext(typeof(CattleTrackingContext))]
-    partial class CattleTrackingContextModelSnapshot : ModelSnapshot
+    [Migration("20260309161639_AddAnimalCategory")]
+    partial class AddAnimalCategory
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -566,11 +569,6 @@ namespace ApiWebTrackerGanado.Migrations
 
                     b.Property<double>("Latitude")
                         .HasColumnType("double precision");
-
-                    b.Property<string>("LocationType")
-                        .IsRequired()
-                        .HasMaxLength(10)
-                        .HasColumnType("character varying(10)");
 
                     b.Property<double>("Longitude")
                         .HasColumnType("double precision");

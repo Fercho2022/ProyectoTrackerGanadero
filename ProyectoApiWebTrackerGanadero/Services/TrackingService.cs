@@ -98,6 +98,7 @@ namespace ApiWebTrackerGanado.Services
                 ActivityLevel = trackerData.ActivityLevel,
                 Temperature = trackerData.Temperature,
                 SignalStrength = trackerData.SignalStrength,
+                LocationType = trackerData.LocationType,
                 Timestamp = trackerData.Timestamp.ToUniversalTime(),
                 AnimalId = assignedAnimal?.Id
             };
@@ -323,6 +324,8 @@ namespace ApiWebTrackerGanado.Services
                     Status = animal.Status,
                     FarmId = animal.FarmId,
                     TrackerId = animal.TrackerId,
+                    Gender = animal.Gender,
+                    Category = animal.Category,
                     CurrentLocation = locationDto,
                     HasSignal = locationDto?.HasSignal ?? false
                 });
@@ -396,6 +399,8 @@ namespace ApiWebTrackerGanado.Services
                     Status = animal.Status,
                     FarmId = animal.FarmId,
                     TrackerId = animal.TrackerId,
+                    Gender = animal.Gender,
+                    Category = animal.Category,
                     CurrentLocation = locationDto,
                     HasSignal = locationDto?.HasSignal ?? false
                 });
@@ -427,6 +432,7 @@ namespace ApiWebTrackerGanado.Services
                 ActivityLevel = locationData.ActivityLevel,
                 Temperature = locationData.Temperature,
                 SignalStrength = locationData.SignalStrength,
+                LocationType = locationData.LocationType,
                 Timestamp = locationData.Timestamp.Kind == DateTimeKind.Utc
                     ? locationData.Timestamp
                     : locationData.Timestamp.ToUniversalTime()

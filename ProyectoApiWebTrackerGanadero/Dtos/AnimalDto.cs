@@ -7,6 +7,7 @@
         public string? Tag { get; set; }
         public DateTime BirthDate { get; set; }
         public string Gender { get; set; } = string.Empty;
+        public string Category { get; set; } = string.Empty;
         public string Breed { get; set; } = string.Empty;
         public decimal Weight { get; set; }
         public string Status { get; set; } = string.Empty;

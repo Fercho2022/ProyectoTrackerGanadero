@@ -35,6 +35,17 @@
                         </div>
                         <i class="fas fa-exclamation-triangle fa-2x"></i>
                     </div>
+                    @if (_highPriorityCount > 0)
+                    {
+                        <button class="btn btn-sm btn-outline-light mt-2 w-100 @(_resolvingSeverity == "high" ? "disabled" : "")"
+                                @onclick='() => ResolveAllBySeverity("high")'>
+                            @if (_resolvingSeverity == "high")
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            <i class="fas fa-check-double me-1"></i> Resolver todas (@_highPriorityCount)
+                        </button>
+                    }
                 </div>
             </div>
         </div>
@@ -48,6 +59,17 @@
                         </div>
                         <i class="fas fa-exclamation-circle fa-2x"></i>
                     </div>
+                    @if (_mediumPriorityCount > 0)
+                    {
+                        <button class="btn btn-sm btn-outline-light mt-2 w-100 @(_resolvingSeverity == "medium" ? "disabled" : "")"
+                                @onclick='() => ResolveAllBySeverity("medium")'>
+                            @if (_resolvingSeverity == "medium")
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            <i class="fas fa-check-double me-1"></i> Resolver todas (@_mediumPriorityCount)
+                        </button>
+                    }
                 </div>
             </div>
         </div>
@@ -61,6 +83,17 @@
                         </div>
                         <i class="fas fa-info-circle fa-2x"></i>
                     </div>
+                    @if (_lowPriorityCount > 0)
+                    {
+                        <button class="btn btn-sm btn-outline-light mt-2 w-100 @(_resolvingSeverity == "low" ? "disabled" : "")"
+                                @onclick='() => ResolveAllBySeverity("low")'>
+                            @if (_resolvingSeverity == "low")
+                            {
+                                <span class="spinner-border spinner-border-sm me-1"></span>
+                            }
+                            <i class="fas fa-check-double me-1"></i> Resolver todas (@_lowPriorityCount)
+                        </button>
+                    }
                 </div>
             </div>
         </div>
@@ -374,6 +407,7 @@
     private int _mediumPriorityCount = 0;
     private int _lowPriorityCount = 0;
     private int _resolvedTodayCount = 0;
+    private string? _resolvingSeverity = null;
 
     protected override async Task OnInitializedAsync()
     {
@@ -532,6 +566,39 @@
         }
     }
 
+    private async Task ResolveAllBySeverity(string severity)
+    {
+        if (_resolvingSeverity != null) return;
+
+        try
+        {
+            _resolvingSeverity = severity;
+            StateHasChanged();
+
+            var count = await AlertService.ResolveAlertsBySeverityAsync(severity);
+
+            // Actualizar estado local
+            var now = DateTime.UtcNow;
+            foreach (var alert in _alerts.Where(a => !a.IsResolved && a.Severity.Equals(severity, StringComparison.OrdinalIgnoreCase)))
+            {
+                alert.IsResolved = true;
+                alert.ResolvedAt = now;
+            }
+
+            CalculateStats();
+            await ApplyFilters();
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error resolving alerts by severity: {ex.Message}");
+        }
+        finally
+        {
+            _resolvingSeverity = null;
+            StateHasChanged();
+        }
+    }
+
     private void ViewAlertDetails(AlertDto alert)
     {
         _selectedAlert = alert;
@@ -615,7 +682,7 @@
             {
                 try
                 {
-                    await Task.Delay(30000, cancellationToken); // Wait 30 seconds
+                    await Task.Delay(120000, cancellationToken); // Wait 2 minutes
                 }
                 catch (OperationCanceledException)
                 {

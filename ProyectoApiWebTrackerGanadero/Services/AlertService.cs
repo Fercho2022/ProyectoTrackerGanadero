@@ -21,6 +21,8 @@ namespace ApiWebTrackerGanado.Services
         private readonly CattleTrackingContext _context;
 
         // Constantes para deteccion de celo (patron Gemini)
+        // Para testing rapido: usar endpoint POST api/breeding/seed-test-baselines/{farmId}
+        // para inyectar 7 dias de baselines de prueba, luego analizar con POST api/breeding/analyze-now/{farmId}
         private const double HEAT_DETECTION_FACTOR = 2.5; // Factor multiplicador sobre la media
         private const int BASELINE_MIN_DAYS = 5;          // Minimo de dias de historial necesarios
         private const int BASELINE_WINDOW_DAYS = 7;       // Ventana de dias para calcular media
