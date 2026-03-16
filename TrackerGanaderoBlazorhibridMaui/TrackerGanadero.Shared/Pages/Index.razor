@@ -281,7 +281,7 @@
     protected override async Task OnInitializedAsync()
     {
         await LoadDashboardData();
-        InitializeSignalR();
+        await InitializeSignalR();
 
         // Set up auto-refresh every 1 minute (first tick after 60s, not immediately)
         _autoRefreshTimer = new System.Threading.Timer(async _ =>
@@ -315,7 +315,7 @@
         }
     }
 
-    private void InitializeSignalR()
+    private async Task InitializeSignalR()
     {
         try
         {
@@ -336,6 +336,12 @@
 
             SignalRService.ConnectionStatusChanged += _connectionStatusHandler;
             SignalRService.AlertReceived += _alertReceivedHandler;
+
+            // Iniciar la conexión SignalR
+            await SignalRService.StartConnectionAsync();
+
+            // Sincronizar estado actual (si ya estaba conectado, el evento no se dispara)
+            _signalRConnected = SignalRService.IsConnected;
         }
         catch (Exception ex)
         {

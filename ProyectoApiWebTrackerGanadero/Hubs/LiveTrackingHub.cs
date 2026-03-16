@@ -4,7 +4,7 @@ using System.Text.RegularExpressions;
 
 namespace ApiWebTrackerGanado.Hubs
 {
-    [Authorize]
+    [AllowAnonymous] // TODO: Cambiar a [Authorize] cuando se implemente autenticación JWT en la app
     public class LiveTrackingHub : Hub
     {
         public async Task JoinFarmGroup(string farmId)

@@ -617,8 +617,7 @@ namespace ApiWebTrackerGanado.Services
                         ResolvedAt = alert.ResolvedAt
                     };
 
-                    await _hubContext.Clients.Group($"farm_{alertWithAnimal.Animal.FarmId}")
-                        .SendAsync("AlertResolved", alertDto);
+                    await _hubContext.Clients.All.SendAsync("AlertResolved", alertDto);
                 }
             }
         }
@@ -655,8 +654,8 @@ namespace ApiWebTrackerGanado.Services
                 ResolvedAt = alert.ResolvedAt
             };
 
-            await _hubContext.Clients.Group($"farm_{animal.FarmId}")
-                .SendAsync("NewAlert", alertDto);
+            // Enviar a todos los clientes conectados para actualización en tiempo real
+            await _hubContext.Clients.All.SendAsync("NewAlert", alertDto);
 
             // Enviar notificacion por email/WhatsApp si el usuario lo tiene configurado
             try
@@ -714,8 +713,7 @@ namespace ApiWebTrackerGanado.Services
                         alertDto.AnimalName = alertWithAnimal.Animal.Name;
                         alertDto.FarmName = alertWithAnimal.Animal.Farm?.Name;
 
-                        await _hubContext.Clients.Group($"farm_{alertWithAnimal.Animal.FarmId}")
-                            .SendAsync("AlertResolved", alertDto);
+                        await _hubContext.Clients.All.SendAsync("AlertResolved", alertDto);
                     }
                 }
             }

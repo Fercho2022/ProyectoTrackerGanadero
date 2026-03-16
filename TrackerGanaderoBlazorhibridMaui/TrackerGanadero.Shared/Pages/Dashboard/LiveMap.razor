@@ -19,6 +19,43 @@
                     <p class="text-muted">Ubicación en vivo de todos los animales</p>
                 </div>
                 <div class="d-flex gap-2 map-header-controls">
+                    <div class="animal-search-container" style="position: relative;">
+                        <div class="input-group" style="min-width: 240px;">
+                            <span class="input-group-text"><i class="fas fa-search"></i></span>
+                            <input type="text" class="form-control" placeholder="Buscar por nombre o tag..."
+                                   @bind="_searchText" @bind:event="oninput" />
+                            @if (!string.IsNullOrEmpty(_searchText))
+                            {
+                                <button class="btn btn-outline-secondary" type="button" @onclick="ClearSearch">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            }
+                        </div>
+                        @if (!string.IsNullOrEmpty(_searchText) && FilteredAnimals.Any())
+                        {
+                            <div class="animal-search-dropdown">
+                                @foreach (var animal in FilteredAnimals)
+                                {
+                                    <div class="animal-search-item" @onclick="() => SelectSearchResult(animal.AnimalId)">
+                                        <i class="fas @(animal.Gender?.ToLower() == "male" ? "fa-mars text-primary" : "fa-venus text-danger") me-2"></i>
+                                        <span class="fw-bold">@animal.AnimalName</span>
+                                        @if (!string.IsNullOrEmpty(animal.Tag))
+                                        {
+                                            <span class="text-muted ms-2" style="font-size: 0.85em;">Tag: @animal.Tag</span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                        }
+                        else if (!string.IsNullOrEmpty(_searchText) && !FilteredAnimals.Any())
+                        {
+                            <div class="animal-search-dropdown">
+                                <div class="animal-search-item text-muted" style="cursor: default;">
+                                    <i class="fas fa-info-circle me-2"></i> Sin resultados
+                                </div>
+                            </div>
+                        }
+                    </div>
                     <select class="form-select" @onchange="OnFarmSelected">
                         <option value="">Todas las granjas</option>
                         @if (_farms != null)
@@ -42,6 +79,9 @@
                             <i class="fas fa-eye"></i> Ver Todos
                         </button>
                     }
+                    <button class="btn btn-outline-info" @onclick="FitToAllAnimals" title="Ajustar zoom para ver todos los animales">
+                        <i class="fas fa-expand"></i> Ajustar Zoom
+                    </button>
                     <button class="btn btn-outline-primary" @onclick="RefreshMap">
                         <i class="fas fa-sync-alt"></i> Actualizar
                     </button>
@@ -259,9 +299,33 @@
     private Timer? _autoRefreshTimer;
     private Timer? _selectedAnimalTrackingTimer;
     private bool _disposed = false;
+    private DotNetObjectReference<LiveMap>? _dotNetRef;
     private bool _mapInitialized = false;
     private bool _isTrackingSelectedAnimal = false;
     private bool _isRefreshing = false; // Re-entrancy guard for auto-refresh
+
+    // Search
+    private string _searchText = string.Empty;
+
+    private IEnumerable<AnimalLocationDto> FilteredAnimals =>
+        string.IsNullOrWhiteSpace(_searchText)
+            ? Enumerable.Empty<AnimalLocationDto>()
+            : _animalLocations
+                .Where(a =>
+                    (a.AnimalName?.Contains(_searchText, StringComparison.OrdinalIgnoreCase) == true) ||
+                    (a.Tag?.Contains(_searchText, StringComparison.OrdinalIgnoreCase) == true))
+                .Take(8);
+
+    private async Task SelectSearchResult(int animalId)
+    {
+        _searchText = string.Empty;
+        await SelectAnimal(animalId);
+    }
+
+    private void ClearSearch()
+    {
+        _searchText = string.Empty;
+    }
 
     // Route-related state
     private RouteDto? _currentRoute = null;
@@ -311,7 +375,7 @@
         }
     }
 
-    private async Task LoadAnimalLocations()
+    private async Task LoadAnimalLocations(bool autoFitBounds = false)
     {
         try
         {
@@ -330,7 +394,7 @@
             // Otherwise, InitializeMap() in OnAfterRenderAsync will handle it
             if (_mapInitialized)
             {
-                await UpdateMapMarkers();
+                await UpdateMapMarkers(autoFitBounds);
             }
             StateHasChanged();
         }
@@ -344,44 +408,45 @@
     {
         try
         {
-            // Simplified SignalR initialization without authentication for now
-            Console.WriteLine("SignalR initialization disabled temporarily due to authentication requirements");
-            _signalRConnected = false;
+            SignalRService.ConnectionStatusChanged += OnConnectionStatusChanged;
+            SignalRService.LocationUpdated += OnLocationUpdated;
 
-            // TODO: Re-enable SignalR when authentication is properly implemented
-            /*
-            SignalRService.ConnectionStatusChanged += (status) =>
-            {
-                _signalRConnected = status == "Connected";
-                InvokeAsync(StateHasChanged);
-            };
+            await SignalRService.StartConnectionAsync();
 
-            SignalRService.LocationUpdated += async (location) =>
-            {
-                // Update or add the animal location
-                var existingIndex = _animalLocations.FindIndex(a => a.AnimalId == location.AnimalId);
-                if (existingIndex >= 0)
-                {
-                    _animalLocations[existingIndex] = location;
-                }
-                else
-                {
-                    _animalLocations.Add(location);
-                }
-
-                _lastUpdate = DateTime.Now;
-                await InvokeAsync(async () =>
-                {
-                    await UpdateMapMarkers();
-                    StateHasChanged();
-                });
-            };
-            */
+            // Sincronizar estado actual (si ya estaba conectado, el evento no se dispara)
+            _signalRConnected = SignalRService.IsConnected;
         }
         catch (Exception ex)
         {
             Console.WriteLine($"Error initializing SignalR: {ex.Message}");
         }
+    }
+
+    private void OnConnectionStatusChanged(string status)
+    {
+        _signalRConnected = status == "Connected";
+        InvokeAsync(StateHasChanged);
+    }
+
+    private async void OnLocationUpdated(AnimalLocationDto location)
+    {
+        // Update or add the animal location
+        var existingIndex = _animalLocations.FindIndex(a => a.AnimalId == location.AnimalId);
+        if (existingIndex >= 0)
+        {
+            _animalLocations[existingIndex] = location;
+        }
+        else
+        {
+            _animalLocations.Add(location);
+        }
+
+        _lastUpdate = DateTime.Now;
+        await InvokeAsync(async () =>
+        {
+            await UpdateMapMarkers();
+            StateHasChanged();
+        });
     }
 
     private async Task InitializeMap()
@@ -391,6 +456,10 @@
             // Reset map initialization state
             _mapInitialized = false;
 
+            // Pass .NET reference to JS for callbacks (e.g. navigate button in popups)
+            _dotNetRef ??= DotNetObjectReference.Create(this);
+            await JSRuntime.InvokeVoidAsync("setDotNetRef", _dotNetRef);
+
             // Force map re-initialization on each call
             await JSRuntime.InvokeVoidAsync("reinitializeMap");
 
@@ -399,7 +468,13 @@
             await JSRuntime.InvokeVoidAsync("eval", "if (map) map.invalidateSize();");
 
             _mapInitialized = true;
-            await UpdateMapMarkers();
+
+            // Load geofence boundaries data (without showing them on map)
+            // This allows marker colors to reflect geofence status immediately
+            await LoadGeofenceBoundariesData();
+
+            // Update markers and auto-fit to show all animals
+            await UpdateMapMarkers(autoFitBounds: true);
         }
         catch (Exception ex)
         {
@@ -408,7 +483,46 @@
         }
     }
 
-    private async Task UpdateMapMarkers()
+    private async Task LoadGeofenceBoundariesData()
+    {
+        try
+        {
+            if (_selectedFarmId.HasValue)
+            {
+                // Load boundary data for the selected farm only
+                var selectedFarm = _farms?.FirstOrDefault(f => f.Id == _selectedFarmId.Value);
+                if (selectedFarm?.BoundaryCoordinates?.Any() == true)
+                {
+                    Console.WriteLine($"Loading geofence data for farm: {selectedFarm.Name}");
+                    await JSRuntime.InvokeVoidAsync("loadFarmBoundaryData",
+                        selectedFarm.Id,
+                        selectedFarm.Name,
+                        selectedFarm.BoundaryCoordinates.ToArray());
+                }
+            }
+            else
+            {
+                // Load boundary data for all farms
+                if (_farms?.Any() == true)
+                {
+                    foreach (var farm in _farms.Where(f => f.BoundaryCoordinates?.Any() == true))
+                    {
+                        Console.WriteLine($"Loading geofence data for farm: {farm.Name}");
+                        await JSRuntime.InvokeVoidAsync("loadFarmBoundaryData",
+                            farm.Id,
+                            farm.Name,
+                            farm.BoundaryCoordinates.ToArray());
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading geofence boundaries data: {ex.Message}");
+        }
+    }
+
+    private async Task UpdateMapMarkers(bool autoFitBounds = false)
     {
         try
         {
@@ -437,6 +551,14 @@
 
             bool openAllPopups = !_selectedAnimalId.HasValue;
             await JSRuntime.InvokeVoidAsync("updateMapMarkers", markersData, openAllPopups);
+
+            // Auto-fit bounds after updating markers if requested
+            if (autoFitBounds && markersData.Length > 0)
+            {
+                Console.WriteLine($"Auto-fitting bounds to {markersData.Length} animals...");
+                await Task.Delay(500); // Wait for markers to be rendered
+                await FitToAllAnimals();
+            }
         }
         catch (Exception ex)
         {
@@ -463,7 +585,12 @@
         // Reset del estado del mapa para permitir reajuste de zoom inicial
         await JSRuntime.InvokeVoidAsync("resetMapState");
 
-        await LoadAnimalLocations();
+        // Load geofence boundaries data for the new selected farm
+        // This ensures marker colors reflect geofence status even when polygon is not visible
+        await LoadGeofenceBoundariesData();
+
+        // Load animals and auto-fit zoom to show all animals
+        await LoadAnimalLocations(autoFitBounds: true);
     }
 
     private async Task RefreshMap()
@@ -475,6 +602,47 @@
 
         _isLoading = false;
         StateHasChanged();
+    }
+
+    private async Task FitToAllAnimals()
+    {
+        try
+        {
+            Console.WriteLine("FitToAllAnimals button clicked");
+            await JSRuntime.InvokeVoidAsync("eval", @"
+                if (typeof window.fitToAllAnimals === 'function') {
+                    console.log('Calling fitToAllAnimals...');
+                    window.fitToAllAnimals();
+                } else {
+                    console.error('fitToAllAnimals function not found!');
+                }
+            ");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error fitting to all animals: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Centra el mapa en el área de geofencing + animales al iniciar
+    /// Replica exactamente cómo FarmManagement muestra el mapa al editar
+    /// </summary>
+    private async Task CenterMapOnGeofenceAndAnimals()
+    {
+        try
+        {
+            Console.WriteLine("🎯 Centering map on geofence area + animals (initial load)");
+
+            // Llamar a la función JS que combina boundaries + animales
+            await JSRuntime.InvokeVoidAsync("fitToGeofenceAndAnimals", (object?)null);
+
+            Console.WriteLine("✅ Map centered successfully");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"❌ Error centering map on geofence: {ex.Message}");
+        }
     }
 
     private async Task ShowAllAnimals()
@@ -803,6 +971,12 @@
     }
 
     // ==================== GPS NAVIGATION METHODS ====================
+
+    [JSInvokable]
+    public async Task NavigateToAnimalFromJs(int animalId)
+    {
+        await NavigateToAnimal(animalId);
+    }
 
     /// <summary>
     /// Calculates and displays route to selected animal
@@ -1413,6 +1587,14 @@
         // Stop user movement simulation
         StopUserMovementSimulation();
 
+        // Dispose .NET JS reference
+        _dotNetRef?.Dispose();
+        _dotNetRef = null;
+
+        // Desuscribir eventos SignalR
+        SignalRService.ConnectionStatusChanged -= OnConnectionStatusChanged;
+        SignalRService.LocationUpdated -= OnLocationUpdated;
+
         // Clean up map when component is disposed
         try
         {
@@ -1432,6 +1614,36 @@
 
 <!-- Custom CSS for enhanced map popups -->
 <style>
+    .animal-search-dropdown {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        background: #fff;
+        border: 1px solid #dee2e6;
+        border-radius: 0 0 6px 6px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        z-index: 1050;
+        max-height: 320px;
+        overflow-y: auto;
+    }
+
+    .animal-search-item {
+        padding: 8px 12px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        border-bottom: 1px solid #f0f0f0;
+    }
+
+    .animal-search-item:last-child {
+        border-bottom: none;
+    }
+
+    .animal-search-item:hover {
+        background-color: #e8f5e9;
+    }
+
     .custom-popup .leaflet-popup-content-wrapper {
         border-radius: 10px;
         box-shadow: 0 5px 20px rgba(0, 0, 0, 0.2);
@@ -1453,6 +1665,11 @@
     .custom-cow-marker {
         filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.3));
         position: relative;
+    }
+
+    .cow-dot-marker {
+        background: transparent !important;
+        border: none !important;
     }
 
     .cow-marker-with-pulse {
@@ -1640,6 +1857,19 @@
     let map;
     let markers = {};
     let mapInitialized = false;
+    let dotNetRef = null;
+
+    // Recibir referencia .NET para callbacks desde popups
+    window.setDotNetRef = function(ref) {
+        dotNetRef = ref;
+    };
+
+    // Llamado desde el botón "Navegar" dentro del popup del marcador
+    window.popupNavigateToAnimal = function(animalId) {
+        if (dotNetRef) {
+            dotNetRef.invokeMethodAsync('NavigateToAnimalFromJs', animalId);
+        }
+    };
 
     // Route rendering variables
     let routeLayer = null;
@@ -1747,6 +1977,17 @@
                     }, 200);
                 });
 
+                // Escalar iconos al cambiar zoom para que no se vean desplazados
+                map.on('zoomend', function() {
+                    if (lastAnimalsData && lastAnimalsData.length > 0) {
+                        lastAnimalsData.forEach(function(animal) {
+                            if (!animal.currentLocation || !markers[animal.id]) return;
+                            var result = createAnimalIcon(animal);
+                            markers[animal.id].setIcon(result.icon);
+                        });
+                    }
+                });
+
             } catch (error) {
                 console.error("Error initializing map:", error);
                 mapInitialized = false;
@@ -1762,12 +2003,41 @@
     // Nueva variable para controlar si mostrar todos los popups
     let showAllPopups = true;
 
+    // Cache de datos de animales para refrescar marcadores al cambiar geofencing
+    let lastAnimalsData = null;
+
     // Funcion auxiliar para crear el icono de un animal
+    // Verificar si un animal está dentro de algún geofence activo
+    function isAnimalInsideGeofence(lat, lng) {
+        if (!farmBoundaries || farmBoundaries.length === 0) return true; // Sin geofence = considerarlo dentro
+        const point = [lat, lng];
+        for (let i = 0; i < farmBoundaries.length; i++) {
+            const boundary = farmBoundaries[i];
+            if (boundary.polygon) {
+                const latlngs = boundary.polygon.getLatLngs()[0]; // Primer anillo del polígono
+                const polygonCoords = latlngs.map(ll => [ll.lat, ll.lng]);
+                if (isPointInsidePolygon(point, polygonCoords)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Umbral de zoom para cambiar de modo dot a modo emoji completo
+    const ZOOM_FULL_MARKER = 16;
+
     function createAnimalIcon(animal) {
         const now = new Date();
         const locationTime = new Date(animal.currentLocation.timestamp);
         const timeDiffMinutes = (now - locationTime) / (1000 * 60);
         const isConnected = timeDiffMinutes <= 10;
+
+        // Verificar si el animal está dentro del geofence
+        const insideGeofence = isAnimalInsideGeofence(
+            animal.currentLocation.latitude,
+            animal.currentLocation.longitude
+        );
 
         let markerColor = '#4285f4';
         if (!isConnected) {
@@ -1780,12 +2050,69 @@
         }
 
         const isToro = animal.category?.toLowerCase() === 'toro';
+        const zoom = map ? map.getZoom() : 16;
+
+        // ── Modo DOT: zoom bajo → puntos pequeños sin emoji ──
+        // Esto evita que los marcadores se vean visualmente fuera del polígono
+        if (zoom < ZOOM_FULL_MARKER) {
+            // Tamaño del dot según zoom: más chico cuanto más alejado
+            let dotSize;
+            if (zoom <= 11) dotSize = 18;
+            else if (zoom <= 12) dotSize = 26;
+            else if (zoom <= 13) dotSize = 32;
+            else if (zoom <= 14) dotSize = 36;
+            else dotSize = 40; // zoom 15
+
+            const animalEmoji = isToro ? '\u{1F402}' : '\u{1F404}';
+            const showEmoji = dotSize >= 20; // mostrar emoji cuando el dot es suficientemente grande
+            const emojiFontSize = Math.round(dotSize * 0.55);
+            const dotBorder = !insideGeofence ? '2px solid #ff0000' : (isToro ? '2px solid #FFD700' : '2px solid rgba(255,255,255,0.8)');
+            const dotShadow = !insideGeofence ? '0 0 6px rgba(255,0,0,0.7)' : (isToro ? '0 0 4px rgba(255,215,0,0.5)' : '0 1px 3px rgba(0,0,0,0.3)');
+
+            return {
+                icon: L.divIcon({
+                    html: `<div style="
+                        background-color: ${isToro ? '#1a1a2e' : markerColor};
+                        border: ${dotBorder};
+                        border-radius: 50%;
+                        width: ${dotSize}px;
+                        height: ${dotSize}px;
+                        box-sizing: border-box;
+                        box-shadow: ${dotShadow};
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        font-size: ${emojiFontSize}px;
+                        line-height: 1;
+                    ">${showEmoji ? animalEmoji : ''}</div>`,
+                    className: 'cow-dot-marker',
+                    iconSize: [dotSize, dotSize],
+                    iconAnchor: [dotSize / 2, dotSize / 2]
+                }),
+                isConnected,
+                insideGeofence,
+                markerColor
+            };
+        }
+
+        // ── Modo FULL: zoom alto → marcador completo con emoji ──
         const animalEmoji = isToro ? '\u{1F402}' : '\u{1F404}';
         const markerSize = isToro ? 45 : 35;
         const fontSize = isToro ? 22 : 18;
-        const borderColor = isToro ? '#FFD700' : (isConnected ? '#fff' : '#adb5bd');
-        const borderWidth = isToro ? 4 : 3;
+
+        // Borde: rojo si está fuera del geofence, dorado para toro, blanco/gris según conexión
+        let borderColor;
+        if (!insideGeofence) {
+            borderColor = '#ff0000';
+        } else if (isToro) {
+            borderColor = '#FFD700';
+        } else {
+            borderColor = isConnected ? '#fff' : '#adb5bd';
+        }
+
+        const borderWidth = !insideGeofence ? 4 : (isToro ? 4 : 3);
         const markerClass = isConnected ? 'cow-marker-with-pulse' : 'cow-marker-disconnected';
+        const outsideShadow = !insideGeofence ? '0 0 10px rgba(255,0,0,0.6), ' : '';
 
         return {
             icon: L.divIcon({
@@ -1796,11 +2123,12 @@
                         border-radius: 50%;
                         width: ${markerSize}px;
                         height: ${markerSize}px;
+                        box-sizing: border-box;
                         display: flex;
                         align-items: center;
                         justify-content: center;
                         font-size: ${fontSize}px;
-                        box-shadow: ${isToro ? '0 0 12px rgba(255,215,0,0.6), 0 2px 8px rgba(0,0,0,0.4)' : `0 2px 8px rgba(0,0,0,${isConnected ? '0.3' : '0.15'})`};
+                        box-shadow: ${outsideShadow}${isToro && insideGeofence ? '0 0 12px rgba(255,215,0,0.6), 0 2px 8px rgba(0,0,0,0.4)' : `0 2px 8px rgba(0,0,0,${isConnected ? '0.3' : '0.15'})`};
                         cursor: pointer;
                     ">
                         ${animalEmoji}
@@ -1808,22 +2136,26 @@
                 `,
                 className: 'custom-cow-marker',
                 iconSize: [markerSize, markerSize],
-                iconAnchor: [markerSize/2, markerSize/2]
+                iconAnchor: [markerSize / 2, markerSize / 2]
             }),
             isConnected,
+            insideGeofence,
             markerColor
         };
     }
 
     // Funcion auxiliar para crear el popup de un animal
-    function createAnimalPopup(animal, latLng, isConnected) {
+    function createAnimalPopup(animal, latLng, isConnected, insideGeofence) {
         const connectionStatus = isConnected ? 'Conectado' : 'Desconectado';
+        const geofenceStatus = insideGeofence ? 'Dentro del área' : 'FUERA del área';
+        const geofenceColor = insideGeofence ? '#28a745' : '#dc3545';
         return `
             <div style="min-width: 200px;">
                 <h6 style="margin: 0 0 8px 0; font-weight: bold; color: #333;">${animal.name}</h6>
                 ${animal.tag ? `<p style="margin: 4px 0;"><strong>Tag:</strong> ${animal.tag}</p>` : ''}
                 <p style="margin: 4px 0;"><strong>Categoría:</strong> ${animal.category || (animal.gender?.toLowerCase() === 'male' ? 'Macho' : 'Hembra')}</p>
                 <p style="margin: 4px 0;"><strong>Conexión:</strong> <span style="color: ${isConnected ? '#28a745' : '#dc3545'}; font-weight: bold;">${connectionStatus}</span></p>
+                <p style="margin: 4px 0;"><strong>Geofence:</strong> <span style="color: ${geofenceColor}; font-weight: bold;">${geofenceStatus}</span></p>
                 <p style="margin: 4px 0;"><strong>Estado:</strong> ${translateStatus(animal.status)}</p>
                 <p style="margin: 4px 0;"><strong>Coordenadas:</strong> ${latLng[0].toFixed(6)}, ${latLng[1].toFixed(6)}</p>
                 <p style="margin: 4px 0;"><strong>Velocidad:</strong> ${animal.currentLocation.speed || 0} km/h</p>
@@ -1831,6 +2163,18 @@
                 <p style="margin: 4px 0;"><strong>Altitud:</strong> ${animal.currentLocation.altitude || 'N/A'} m</p>
                 <p style="margin: 4px 0;"><strong>Actividad:</strong> ${animal.currentLocation.activityLevel || 'N/A'}</p>
                 <p style="margin: 4px 0;"><strong>Última actualización:</strong> ${new Date(animal.currentLocation.timestamp).toLocaleTimeString()}</p>
+                <button onclick="window.popupNavigateToAnimal(${animal.id})" style="
+                    margin-top: 8px;
+                    width: 100%;
+                    padding: 6px 12px;
+                    background-color: #28a745;
+                    color: white;
+                    border: none;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    font-size: 13px;
+                    font-weight: bold;
+                "><i class="fas fa-route" style="margin-right: 6px;"></i>Navegar a este animal</button>
             </div>
         `;
     }
@@ -1851,6 +2195,9 @@
 
         if (!animalsData || animalsData.length === 0) return;
 
+        // Guardar datos para poder refrescar al cambiar geofencing
+        lastAnimalsData = animalsData;
+
         try {
             const isFirstLoad = Object.keys(markers).length === 0;
             const incomingIds = new Set();
@@ -1866,8 +2213,8 @@
                 markerLatLngs.push(latLng);
                 incomingIds.add(animal.id);
 
-                const { icon, isConnected } = createAnimalIcon(animal);
-                const popupContent = createAnimalPopup(animal, latLng, isConnected);
+                const { icon, isConnected, insideGeofence } = createAnimalIcon(animal);
+                const popupContent = createAnimalPopup(animal, latLng, isConnected, insideGeofence);
 
                 if (markers[animal.id]) {
                     // Marcador ya existe: solo actualizar posicion, icono y popup SIN tocar la vista
@@ -1882,13 +2229,29 @@
                     marker.on('mouseover', function() {
                         Object.values(markers).forEach(m => { if (m !== marker) m.closePopup(); });
                         if (window.centerMarker) window.centerMarker.closePopup();
+                        if (marker._closeTimeout) { clearTimeout(marker._closeTimeout); marker._closeTimeout = null; }
                         marker.openPopup();
                     });
                     marker.on('mouseout', function() {
-                        setTimeout(() => marker.closePopup(), 100);
+                        marker._closeTimeout = setTimeout(function() {
+                            marker.closePopup();
+                            marker._closeTimeout = null;
+                        }, 350);
                     });
-                    marker.on('click', function() {
-                        console.log(`Animal ${animal.name} clicked`);
+                    // Mantener popup abierto cuando el mouse entra al popup
+                    marker.on('popupopen', function() {
+                        var popupEl = marker.getPopup().getElement();
+                        if (popupEl) {
+                            popupEl.addEventListener('mouseenter', function() {
+                                if (marker._closeTimeout) { clearTimeout(marker._closeTimeout); marker._closeTimeout = null; }
+                            });
+                            popupEl.addEventListener('mouseleave', function() {
+                                marker._closeTimeout = setTimeout(function() {
+                                    marker.closePopup();
+                                    marker._closeTimeout = null;
+                                }, 350);
+                            });
+                        }
                     });
 
                     marker.addTo(map);
@@ -1904,19 +2267,40 @@
                 }
             });
 
-            // Solo ajustar vista en la PRIMERA carga, despues NUNCA mover el mapa automaticamente
-            if (isFirstLoad && markerLatLngs.length > 0) {
-                if (markerLatLngs.length === 1) {
-                    map.setView(markerLatLngs[0], 15);
-                } else {
-                    const group = new L.featureGroup(Object.values(markers));
-                    map.fitBounds(group.getBounds().pad(0.15), { padding: [30, 30], maxZoom: 15 });
-                }
-                setTimeout(() => { if (map) map.invalidateSize(); }, 150);
-            }
-
+            // Auto-fit is now controlled from C# code via fitToAllAnimals()
+            // This ensures proper timing and control
             showAllPopups = openAllPopups;
-            console.log(`Map updated: ${Object.keys(markers).length} markers (${isFirstLoad ? 'initial' : 'refresh'})`);
+            console.log(`Map markers updated: ${Object.keys(markers).length} total markers (${isFirstLoad ? 'initial load' : 'refresh'})`);
+
+            // En la primera carga, centrar el mapa usando el polígono del geofencing
+            // (igual que FarmManagement) para obtener el mismo zoom ajustado
+            if (isFirstLoad && markerLatLngs.length > 0) {
+                var boundsLatLngs = [];
+
+                // PRIORIDAD: usar coordenadas del polígono del geofencing como base del zoom
+                // Esto da el mismo nivel de zoom que FarmManagement
+                if (farmBoundaries.length > 0) {
+                    farmBoundaries.forEach(function(boundary) {
+                        if (boundary.polygon) {
+                            var polyLatLngs = boundary.polygon.getLatLngs()[0];
+                            if (polyLatLngs) {
+                                polyLatLngs.forEach(function(ll) {
+                                    boundsLatLngs.push(L.latLng(ll.lat, ll.lng));
+                                });
+                            }
+                        }
+                    });
+                }
+
+                // Si no hay geofencing cargado, usar las posiciones de los animales
+                if (boundsLatLngs.length === 0) {
+                    boundsLatLngs = markerLatLngs.map(function(ll) { return L.latLng(ll[0], ll[1]); });
+                }
+
+                var bounds = L.latLngBounds(boundsLatLngs);
+                map.fitBounds(bounds, { padding: [20, 20] });
+                console.log('Initial load: map fitted to ' + boundsLatLngs.length + ' boundary points');
+            }
 
         } catch (error) {
             console.error("Error updating map markers:", error);
@@ -1928,6 +2312,68 @@
         // Limpiar todos los marcadores para que la proxima carga sea tratada como primera carga
         Object.values(markers).forEach(marker => map.removeLayer(marker));
         markers = {};
+    };
+
+    // Función para centrar el mapa sobre el área del geofencing + animales
+    // Replica la lógica de FarmManagement: combina coordenadas del polígono + animales
+    window.fitToGeofenceAndAnimals = function(boundaryCoordinates) {
+        console.log("fitToGeofenceAndAnimals called");
+        console.log("- Boundary coordinates:", boundaryCoordinates ? boundaryCoordinates.length : 0);
+        console.log("- Markers count:", Object.keys(markers).length);
+        console.log("- Farm boundaries loaded:", farmBoundaries.length);
+
+        if (!map || !mapInitialized) {
+            console.warn("Map not ready for fitting bounds");
+            return;
+        }
+
+        var allLatLngs = [];
+
+        // 1. Add geofencing boundary coordinates (if provided from C#)
+        if (boundaryCoordinates && boundaryCoordinates.length > 0) {
+            boundaryCoordinates.forEach(function(coord) {
+                allLatLngs.push(L.latLng(coord.lat || coord.latitude, coord.lng || coord.longitude));
+            });
+        }
+
+        // 2. Also add coordinates from loaded farmBoundaries (the polygons)
+        if (farmBoundaries.length > 0) {
+            farmBoundaries.forEach(function(boundary) {
+                if (boundary.polygon) {
+                    var latlngs = boundary.polygon.getLatLngs()[0];
+                    if (latlngs) {
+                        latlngs.forEach(function(ll) {
+                            allLatLngs.push(L.latLng(ll.lat, ll.lng));
+                        });
+                    }
+                }
+            });
+        }
+
+        // 3. Add all animal marker positions
+        Object.values(markers).forEach(function(marker) {
+            allLatLngs.push(marker.getLatLng());
+        });
+
+        if (allLatLngs.length === 0) {
+            console.warn("No coordinates to fit");
+            return;
+        }
+
+        // Fit map to show both the geofencing area and all animals
+        var bounds = L.latLngBounds(allLatLngs);
+        map.fitBounds(bounds, { padding: [30, 30] });
+
+        setTimeout(function() {
+            if (map) map.invalidateSize();
+        }, 150);
+
+        console.log("✅ Map fitted to geofence + animals (" + allLatLngs.length + " total points)");
+    };
+
+    // Wrapper para el botón "Ajustar Zoom" (sin coordenadas de boundary)
+    window.fitToAllAnimals = function() {
+        window.fitToGeofenceAndAnimals(null);
     };
 
     // Nueva función para mostrar solo un animal específico
@@ -2458,27 +2904,40 @@
     // Variables for farm boundaries
     let farmBoundaries = [];
 
-    // Function to add farm boundary to map
-    window.addFarmBoundary = function(farmId, farmName, coordinates) {
-        console.log(`Adding boundary for farm ${farmName} (ID: ${farmId}) with ${coordinates.length} points`);
+    // Refrescar los iconos de marcadores existentes (re-evalua geofencing)
+    function refreshMarkersGeofenceStatus() {
+        if (!lastAnimalsData || lastAnimalsData.length === 0) return;
+        lastAnimalsData.forEach(animal => {
+            if (!animal.currentLocation || !markers[animal.id]) return;
+            const latLng = [animal.currentLocation.latitude, animal.currentLocation.longitude];
+            const { icon, isConnected, insideGeofence } = createAnimalIcon(animal);
+            const popupContent = createAnimalPopup(animal, latLng, isConnected, insideGeofence);
+            markers[animal.id].setIcon(icon);
+            markers[animal.id].setPopupContent(popupContent);
+        });
+        console.log('Markers refreshed with updated geofence status');
+    }
 
-        if (!map || !mapInitialized) {
-            console.warn("Map not ready for adding boundaries");
-            return;
-        }
+    // Function to load farm boundary data (without displaying on map)
+    // This allows geofence checking to work even when polygon is not visible
+    window.loadFarmBoundaryData = function(farmId, farmName, coordinates) {
+        console.log(`Loading boundary data for farm ${farmName} (ID: ${farmId}) with ${coordinates.length} points`);
 
         try {
+            // Check if this farm's boundary is already loaded
+            const existingIndex = farmBoundaries.findIndex(b => b.farmId === farmId);
+
             // Convert coordinates to Leaflet format
             const latlngs = coordinates.map(coord => [coord.lat, coord.lng]);
 
-            // Create polygon
+            // Create polygon (but don't add to map yet)
             const polygon = L.polygon(latlngs, {
                 color: '#3388ff',
                 weight: 3,
                 opacity: 0.8,
                 fillColor: '#3388ff',
                 fillOpacity: 0.1
-            }).addTo(map);
+            });
 
             // Add popup with farm name
             polygon.bindPopup(`
@@ -2489,40 +2948,84 @@
                 </div>
             `);
 
-            // Store boundary reference
-            farmBoundaries.push({
-                farmId: farmId,
-                farmName: farmName,
-                polygon: polygon
-            });
+            if (existingIndex >= 0) {
+                // Update existing boundary
+                farmBoundaries[existingIndex] = {
+                    farmId: farmId,
+                    farmName: farmName,
+                    polygon: polygon,
+                    visible: farmBoundaries[existingIndex].visible || false
+                };
+            } else {
+                // Add new boundary (not visible by default)
+                farmBoundaries.push({
+                    farmId: farmId,
+                    farmName: farmName,
+                    polygon: polygon,
+                    visible: false
+                });
+            }
 
-            console.log(`✅ Boundary added for farm ${farmName}`);
+            console.log(`✅ Boundary data loaded for farm ${farmName}`);
+
+            // Refrescar marcadores para que re-evaluen geofencing
+            refreshMarkersGeofenceStatus();
+        } catch (error) {
+            console.error(`Error loading boundary data for farm ${farmName}:`, error);
+        }
+    };
+
+    // Function to add farm boundary to map (shows the polygon)
+    window.addFarmBoundary = function(farmId, farmName, coordinates) {
+        console.log(`Showing boundary on map for farm ${farmName} (ID: ${farmId})`);
+
+        if (!map || !mapInitialized) {
+            console.warn("Map not ready for adding boundaries");
+            return;
+        }
+
+        try {
+            // First, load the data if not already loaded
+            loadFarmBoundaryData(farmId, farmName, coordinates);
+
+            // Find the boundary
+            const boundary = farmBoundaries.find(b => b.farmId === farmId);
+            if (boundary && !boundary.visible) {
+                // Add polygon to map
+                boundary.polygon.addTo(map);
+                boundary.visible = true;
+                console.log(`✅ Boundary displayed on map for farm ${farmName}`);
+            }
         } catch (error) {
             console.error(`Error adding boundary for farm ${farmName}:`, error);
         }
     };
 
-    // Function to clear all farm boundaries
+    // Function to hide all farm boundaries from map (but keep data for geofence checking)
     window.clearAllBoundaries = function() {
-        console.log("Clearing all farm boundaries");
+        console.log("Hiding all farm boundaries from map");
 
         if (!map) {
-            console.warn("Map not available for clearing boundaries");
+            console.warn("Map not available for hiding boundaries");
             return;
         }
 
-        // Remove all polygons from map
+        // Remove all visible polygons from map, but keep the data
         farmBoundaries.forEach(boundary => {
             try {
-                map.removeLayer(boundary.polygon);
+                if (boundary.visible && boundary.polygon) {
+                    map.removeLayer(boundary.polygon);
+                    boundary.visible = false;
+                }
             } catch (error) {
                 console.error("Error removing boundary:", error);
             }
         });
 
-        // Clear the array
-        farmBoundaries = [];
-        console.log("✅ All farm boundaries cleared");
+        console.log("✅ All farm boundaries hidden from map (data retained for geofence checking)");
+
+        // Note: We DON'T clear farmBoundaries array anymore
+        // This keeps geofence checking working even when polygons are not visible
     };
 
     // ==================== GPS NAVIGATION FUNCTIONS ====================
@@ -2779,7 +3282,7 @@
         }
 
         // Convert boundaries to format [lat, lng]
-        // boundaries viene de C# como {lat, lng} (camelCase por JSON.NET)
+        // boundaries viene de C# como LatLngDto {lat, lng} (camelCase por JSON)
         const polygon = boundaries.map(coord => [coord.lat, coord.lng]);
 
         // Get bounding box

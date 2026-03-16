@@ -2,7 +2,6 @@ using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using TrackerGanadero.Shared.Models;
-using System.Text.Json;
 
 namespace TrackerGanadero.Shared.Services
 {
@@ -23,27 +22,33 @@ namespace TrackerGanadero.Shared.Services
             _baseUrl = configuration.GetSection("ApiSettings")["BaseUrl"] ?? "https://localhost:7028";
         }
 
-        public async Task StartConnectionAsync(string accessToken)
+        public async Task StartConnectionAsync()
         {
+            if (_connection?.State == HubConnectionState.Connected)
+                return;
+
             try
             {
                 _connection = new HubConnectionBuilder()
-                    .WithUrl($"{_baseUrl}/tracking-hub", options =>
-                    {
-                        options.AccessTokenProvider = () => Task.FromResult(accessToken)!;
-                    })
+                    .WithUrl($"{_baseUrl}/tracking-hub")
                     .WithAutomaticReconnect(new[] { TimeSpan.Zero, TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(30) })
                     .Build();
 
                 // Configure event handlers
-                _connection.On<string>("LocationUpdate", (locationJson) =>
+                // LocationUpdate recibe (int animalId, LocationDto location) desde el server
+                _connection.On<int, LocationDto>("LocationUpdate", (animalId, location) =>
                 {
                     try
                     {
-                        var location = JsonSerializer.Deserialize<AnimalLocationDto>(locationJson);
                         if (location != null)
                         {
-                            LocationUpdated?.Invoke(location);
+                            // Construir AnimalLocationDto con los datos disponibles
+                            var animalLocation = new AnimalLocationDto
+                            {
+                                Id = animalId,
+                                CurrentLocation = location
+                            };
+                            LocationUpdated?.Invoke(animalLocation);
                         }
                     }
                     catch (Exception ex)
@@ -52,11 +57,11 @@ namespace TrackerGanadero.Shared.Services
                     }
                 });
 
-                _connection.On<string>("NewAlert", (alertJson) =>
+                // NewAlert recibe un AlertDto directamente desde el server
+                _connection.On<AlertDto>("NewAlert", (alert) =>
                 {
                     try
                     {
-                        var alert = JsonSerializer.Deserialize<AlertDto>(alertJson);
                         if (alert != null)
                         {
                             AlertReceived?.Invoke(alert);
@@ -68,11 +73,11 @@ namespace TrackerGanadero.Shared.Services
                     }
                 });
 
-                _connection.On<string>("AlertResolved", (alertJson) =>
+                // AlertResolved recibe un AlertDto directamente desde el server
+                _connection.On<AlertDto>("AlertResolved", (alert) =>
                 {
                     try
                     {
-                        var alert = JsonSerializer.Deserialize<AlertDto>(alertJson);
                         if (alert != null)
                         {
                             AlertResolved?.Invoke(alert);

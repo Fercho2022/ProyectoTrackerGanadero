@@ -61,7 +61,7 @@ namespace ApiWebTrackerGanado.Services
 
                             if (!currentlyHasSignal && tracker.IsOnline)
                             {
-                                // Tracker ha perdido senal
+                                // Tracker acaba de perder senal (transicion online -> offline)
                                 _logger.LogWarning("Tracker {DeviceId} (Animal {AnimalId}) detected as offline (LastSeen: {LastSeen}).",
                                     tracker.DeviceId, tracker.Animal.Id, tracker.LastSeen);
                                 tracker.IsOnline = false;
@@ -98,6 +98,12 @@ namespace ApiWebTrackerGanado.Services
                                 await alertService.TriggerNoSignalAlertAsync(tracker.Animal.Id, tracker.Id,
                                     $"Tracker sin señal: No se han recibido datos en los últimos {NO_SIGNAL_THRESHOLD_MINUTES} minutos.");
                             }
+                            else if (!currentlyHasSignal && !tracker.IsOnline)
+                            {
+                                // Tracker ya estaba offline: generar alerta si no existe una activa
+                                await alertService.TriggerNoSignalAlertAsync(tracker.Animal.Id, tracker.Id,
+                                    $"Tracker sin señal: No se han recibido datos en los últimos {NO_SIGNAL_THRESHOLD_MINUTES} minutos.");
+                            }
                             else if (currentlyHasSignal && !tracker.IsOnline)
                             {
                                 // Tracker recupero senal
@@ -129,6 +135,12 @@ namespace ApiWebTrackerGanado.Services
                                 await hubContext.Clients.Group($"farm_{tracker.Animal.FarmId}")
                                     .SendAsync("AnimalLocationUpdate", tracker.Animal.Id, backOnlineLocationDto);
 
+                                await alertService.ResolveNoSignalAlertAsync(tracker.Animal.Id, tracker.Id,
+                                    "El tracker ha recuperado la señal.");
+                            }
+                            else if (currentlyHasSignal && tracker.IsOnline)
+                            {
+                                // Tracker esta sano: resolver alertas huerfanas de NoSignal que no fueron resueltas
                                 await alertService.ResolveNoSignalAlertAsync(tracker.Animal.Id, tracker.Id,
                                     "El tracker ha recuperado la señal.");
                             }
