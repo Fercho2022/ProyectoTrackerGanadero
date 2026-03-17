@@ -19,43 +19,6 @@
                     <p class="text-muted">Ubicación en vivo de todos los animales</p>
                 </div>
                 <div class="d-flex gap-2 map-header-controls">
-                    <div class="animal-search-container" style="position: relative;">
-                        <div class="input-group" style="min-width: 240px;">
-                            <span class="input-group-text"><i class="fas fa-search"></i></span>
-                            <input type="text" class="form-control" placeholder="Buscar por nombre o tag..."
-                                   @bind="_searchText" @bind:event="oninput" />
-                            @if (!string.IsNullOrEmpty(_searchText))
-                            {
-                                <button class="btn btn-outline-secondary" type="button" @onclick="ClearSearch">
-                                    <i class="fas fa-times"></i>
-                                </button>
-                            }
-                        </div>
-                        @if (!string.IsNullOrEmpty(_searchText) && FilteredAnimals.Any())
-                        {
-                            <div class="animal-search-dropdown">
-                                @foreach (var animal in FilteredAnimals)
-                                {
-                                    <div class="animal-search-item" @onclick="() => SelectSearchResult(animal.AnimalId)">
-                                        <i class="fas @(animal.Gender?.ToLower() == "male" ? "fa-mars text-primary" : "fa-venus text-danger") me-2"></i>
-                                        <span class="fw-bold">@animal.AnimalName</span>
-                                        @if (!string.IsNullOrEmpty(animal.Tag))
-                                        {
-                                            <span class="text-muted ms-2" style="font-size: 0.85em;">Tag: @animal.Tag</span>
-                                        }
-                                    </div>
-                                }
-                            </div>
-                        }
-                        else if (!string.IsNullOrEmpty(_searchText) && !FilteredAnimals.Any())
-                        {
-                            <div class="animal-search-dropdown">
-                                <div class="animal-search-item text-muted" style="cursor: default;">
-                                    <i class="fas fa-info-circle me-2"></i> Sin resultados
-                                </div>
-                            </div>
-                        }
-                    </div>
                     <select class="form-select" @onchange="OnFarmSelected">
                         <option value="">Todas las granjas</option>
                         @if (_farms != null)
@@ -96,6 +59,49 @@
         </div>
     </div>
 
+    <!-- Search Bar -->
+    <div class="row mb-2">
+        <div class="col-12">
+            <div class="animal-search-container" style="position: relative;">
+                <div class="input-group">
+                    <span class="input-group-text"><i class="fas fa-search"></i></span>
+                    <input type="text" class="form-control" placeholder="Buscar animal por nombre o tag..."
+                           @bind="_searchText" @bind:event="oninput" />
+                    @if (!string.IsNullOrEmpty(_searchText))
+                    {
+                        <button class="btn btn-outline-secondary" type="button" @onclick="ClearSearch">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    }
+                </div>
+                @if (!string.IsNullOrEmpty(_searchText) && FilteredAnimals.Any())
+                {
+                    <div class="animal-search-dropdown">
+                        @foreach (var animal in FilteredAnimals)
+                        {
+                            <div class="animal-search-item" @onclick="() => SelectSearchResult(animal.AnimalId)">
+                                <i class="fas @(animal.Gender?.ToLower() == "male" ? "fa-mars text-primary" : "fa-venus text-danger") me-2"></i>
+                                <span class="fw-bold">@animal.AnimalName</span>
+                                @if (!string.IsNullOrEmpty(animal.Tag))
+                                {
+                                    <span class="text-muted ms-2" style="font-size: 0.85em;">Tag: @animal.Tag</span>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+                else if (!string.IsNullOrEmpty(_searchText) && !FilteredAnimals.Any())
+                {
+                    <div class="animal-search-dropdown">
+                        <div class="animal-search-item text-muted" style="cursor: default;">
+                            <i class="fas fa-info-circle me-2"></i> Sin resultados
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
     <!-- Connection Status Bar -->
     @if (_animalLocations.Any())
     {
@@ -127,7 +133,7 @@
         <div class="col-lg-9">
             <div class="card">
                 <div class="card-body p-0">
-                    <div id="map" style="height: calc(100vh - 200px); width: 100%; min-height: 500px;"></div>
+                    <div id="map" style="height: calc(100vh - 110px); width: 100%; min-height: 500px;"></div>
 
                     <!-- Route Info Panel -->
                     @if (_currentRoute != null)
@@ -357,6 +363,12 @@
         // This handles both first render and navigation back to this page
         if (!_mapInitialized)
         {
+            // Ensure farms are loaded before initializing map
+            if (_farms == null || !_farms.Any())
+            {
+                await LoadFarms();
+            }
+
             await InitializeMap();
             _isLoading = false;
             StateHasChanged();
@@ -460,8 +472,37 @@
             _dotNetRef ??= DotNetObjectReference.Create(this);
             await JSRuntime.InvokeVoidAsync("setDotNetRef", _dotNetRef);
 
-            // Force map re-initialization on each call
-            await JSRuntime.InvokeVoidAsync("reinitializeMap");
+            // Calculate initial map center from farm coordinates
+            double initialLat = -33.0167;  // Default: Gualeguaychú
+            double initialLng = -58.5167;
+            int initialZoom = 10;
+
+            // If we have a selected farm, use its center coordinates
+            if (_selectedFarmId.HasValue && _farms?.Any() == true)
+            {
+                var selectedFarm = _farms.FirstOrDefault(f => f.Id == _selectedFarmId.Value);
+                if (selectedFarm != null)
+                {
+                    initialLat = selectedFarm.Latitude;
+                    initialLng = selectedFarm.Longitude;
+                    initialZoom = 13; // Closer zoom for single farm
+                    Console.WriteLine($"Using selected farm center: {selectedFarm.Name} at ({initialLat}, {initialLng})");
+                }
+            }
+            // Otherwise, if we have farms, calculate center of all farms
+            else if (_farms?.Any() == true)
+            {
+                var farmsWithCoords = _farms.Where(f => f.Latitude != 0 && f.Longitude != 0).ToList();
+                if (farmsWithCoords.Any())
+                {
+                    initialLat = farmsWithCoords.Average(f => f.Latitude);
+                    initialLng = farmsWithCoords.Average(f => f.Longitude);
+                    Console.WriteLine($"Using average farm center from {farmsWithCoords.Count} farms: ({initialLat}, {initialLng})");
+                }
+            }
+
+            // Force map re-initialization with calculated center
+            await JSRuntime.InvokeVoidAsync("reinitializeMap", initialLat, initialLng, initialZoom);
 
             // Give the map container time to render in the DOM
             await Task.Delay(300);
@@ -608,15 +649,50 @@
     {
         try
         {
-            Console.WriteLine("FitToAllAnimals button clicked");
-            await JSRuntime.InvokeVoidAsync("eval", @"
-                if (typeof window.fitToAllAnimals === 'function') {
-                    console.log('Calling fitToAllAnimals...');
-                    window.fitToAllAnimals();
-                } else {
-                    console.error('fitToAllAnimals function not found!');
+            Console.WriteLine("FitToAllAnimals called");
+
+            // Ensure farms are loaded (in case they were lost during navigation)
+            if (_farms == null || !_farms.Any())
+            {
+                Console.WriteLine("Farms not loaded, loading now...");
+                await LoadFarms();
+            }
+
+            // Ensure geofence boundaries are loaded in JS
+            await LoadGeofenceBoundariesData();
+
+            // Collect ALL coordinates from C# side: animal positions + geofence boundaries
+            var allCoords = new List<object>();
+
+            // 1. Add all geofence boundary coordinates from farms FIRST (for proper zoom)
+            if (_farms?.Any() == true)
+            {
+                foreach (var farm in _farms.Where(f => f.BoundaryCoordinates?.Any() == true))
+                {
+                    foreach (var coord in farm.BoundaryCoordinates!)
+                    {
+                        allCoords.Add(new { lat = coord.Lat, lng = coord.Lng });
+                    }
                 }
-            ");
+            }
+
+            // 2. Add all animal positions
+            foreach (var animal in _animalLocations.Where(a => a.Location != null))
+            {
+                allCoords.Add(new { lat = animal.Location!.Latitude, lng = animal.Location.Longitude });
+            }
+
+            Console.WriteLine($"FitToAllAnimals: passing {allCoords.Count} coordinates to JS ({_farms?.Sum(f => f.BoundaryCoordinates?.Count ?? 0) ?? 0} boundary + {_animalLocations.Count(a => a.Location != null)} animals)");
+
+            if (allCoords.Count > 0)
+            {
+                // Pass all coordinates directly to JS - no dependency on JS-side state
+                await JSRuntime.InvokeVoidAsync("fitMapToCoordinates", allCoords.ToArray());
+            }
+            else
+            {
+                Console.WriteLine("No coordinates to fit - skipping");
+            }
         }
         catch (Exception ex)
         {
@@ -1866,8 +1942,14 @@
 
     // Llamado desde el botón "Navegar" dentro del popup del marcador
     window.popupNavigateToAnimal = function(animalId) {
+        console.log('popupNavigateToAnimal called for animalId:', animalId, 'dotNetRef:', !!dotNetRef);
         if (dotNetRef) {
-            dotNetRef.invokeMethodAsync('NavigateToAnimalFromJs', animalId);
+            dotNetRef.invokeMethodAsync('NavigateToAnimalFromJs', animalId)
+                .then(() => console.log('✅ NavigateToAnimalFromJs invoked successfully'))
+                .catch(err => console.error('❌ Error invoking NavigateToAnimalFromJs:', err));
+        } else {
+            console.error('❌ dotNetRef is null! Cannot navigate. The page may need to be reloaded.');
+            alert('Error: No se pudo iniciar la navegación. Recargá la página e intentá de nuevo.');
         }
     };
 
@@ -1932,6 +2014,7 @@
                 map = null;
             }
             markers = {};
+            farmBoundaries = [];
             if (window.centerMarker) {
                 window.centerMarker = null;
             }
@@ -1943,13 +2026,21 @@
     };
 
     // Force reinitialize map (always creates new map instance)
-    window.reinitializeMap = function() {
+    // Parameters: initialLat, initialLng, initialZoom
+    window.reinitializeMap = function(initialLat, initialLng, initialZoom) {
+        // Use defaults if not provided
+        initialLat = initialLat || -33.0167;
+        initialLng = initialLng || -58.5167;
+        initialZoom = initialZoom || 10;
+
+        console.log(`Reinitializing map with center: [${initialLat}, ${initialLng}], zoom: ${initialZoom}`);
+
         // Always clean up first
         window.cleanupMap();
 
         const mapElement = document.getElementById("map");
         if (!mapElement) {
-            setTimeout(() => window.reinitializeMap(), 500);
+            setTimeout(() => window.reinitializeMap(initialLat, initialLng, initialZoom), 500);
             return;
         }
 
@@ -1958,8 +2049,8 @@
                 mapElement.innerHTML = '';
 
                 map = L.map('map', {
-                    center: [-33.0167, -58.5167],
-                    zoom: 10,
+                    center: [initialLat, initialLng],
+                    zoom: initialZoom,
                     zoomControl: true
                 });
 
@@ -2360,13 +2451,20 @@
             return;
         }
 
+        // Ensure map container size is correct before fitting
+        map.invalidateSize();
+
         // Fit map to show both the geofencing area and all animals
         var bounds = L.latLngBounds(allLatLngs);
         map.fitBounds(bounds, { padding: [30, 30] });
 
+        // Double-check after a short delay in case container was still resizing
         setTimeout(function() {
-            if (map) map.invalidateSize();
-        }, 150);
+            if (map) {
+                map.invalidateSize();
+                map.fitBounds(bounds, { padding: [30, 30] });
+            }
+        }, 200);
 
         console.log("✅ Map fitted to geofence + animals (" + allLatLngs.length + " total points)");
     };
@@ -2374,6 +2472,43 @@
     // Wrapper para el botón "Ajustar Zoom" (sin coordenadas de boundary)
     window.fitToAllAnimals = function() {
         window.fitToGeofenceAndAnimals(null);
+    };
+
+    // Función robusta para centrar mapa recibiendo TODAS las coordenadas desde C#
+    // No depende de estado interno de JS (farmBoundaries, markers)
+    window.fitMapToCoordinates = function(coordinates) {
+        console.log('fitMapToCoordinates called with ' + (coordinates ? coordinates.length : 0) + ' coordinates');
+
+        if (!map) {
+            console.warn('Map not available for fitMapToCoordinates');
+            return;
+        }
+
+        if (!coordinates || coordinates.length === 0) {
+            console.warn('No coordinates provided to fitMapToCoordinates');
+            return;
+        }
+
+        // Force map to recalculate its container size
+        map.invalidateSize();
+
+        var latLngs = coordinates.map(function(c) {
+            return L.latLng(c.lat, c.lng);
+        });
+
+        var bounds = L.latLngBounds(latLngs);
+        map.fitBounds(bounds, { padding: [30, 30] });
+
+        // Re-apply after a brief delay to handle any pending container resizes
+        setTimeout(function() {
+            if (map) {
+                map.invalidateSize();
+                map.fitBounds(bounds, { padding: [30, 30] });
+                console.log('✅ fitMapToCoordinates: map re-fitted after invalidateSize');
+            }
+        }, 250);
+
+        console.log('✅ fitMapToCoordinates: fitted to ' + latLngs.length + ' points');
     };
 
     // Nueva función para mostrar solo un animal específico
@@ -2392,13 +2527,7 @@
             window.centerMarker = null;
         }
 
-        // Abrir solo el popup del animal seleccionado
-        const selectedMarker = markers[animalId];
-        if (selectedMarker) {
-            selectedMarker.openPopup();
-            map.setView(selectedMarker.getLatLng(), 17);
-            console.log(`✅ Showing only animal ${animalId}`);
-        }
+        console.log(`✅ Cleanup done for showSingleAnimal ${animalId}`);
     };
 
     // Nueva función para mostrar todos los animales
@@ -2458,20 +2587,27 @@
 
             console.log(`✅ Found existing marker for animal ${animalId}`);
 
-            // Animate map to the marker's position and open the popup on arrival.
-            map.flyTo([lat, lng], 18).once('moveend', () => {
-                // Close all other popups first to avoid clutter
-                Object.entries(markers).forEach(([id, marker]) => {
-                    if (parseInt(id) !== animalId) {
-                        marker.closePopup();
-                    }
-                });
+            // Close all other popups before animating
+            Object.entries(markers).forEach(([id, marker]) => {
+                if (parseInt(id) !== animalId) {
+                    marker.closePopup();
+                }
+            });
 
-                // Open the popup of the existing marker
+            // Offset the map center NORTH so the marker sits in the lower half of the viewport,
+            // leaving room for the popup (which opens above the marker) to be fully visible.
+            var targetZoom = 17;
+            var targetPoint = map.project([lat, lng], targetZoom);
+            targetPoint.y -= 150; // shift center UP 150px so marker+popup are fully visible
+            var offsetLatLng = map.unproject(targetPoint, targetZoom);
+
+            // Animate map to the offset position
+            map.flyTo(offsetLatLng, targetZoom, { duration: 1.0 }).once('moveend', () => {
+                // Open the popup after animation completes
                 existingMarker.openPopup();
                 console.log(`✅ Popup opened for existing marker of ${animalName}`);
             });
-            console.log(`✅ Popup opened for existing marker of ${animalName}`);
+            console.log(`Flying to animal ${animalName} at zoom ${targetZoom}`);
 
             return; // Exit early - don't create a new marker
 

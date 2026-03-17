@@ -8,6 +8,7 @@
 @inject FarmTrackerService FarmTrackerService
 @inject IJSRuntime JSRuntime
 @inject HttpService HttpService
+@implements IDisposable
 
 <div class="container-fluid">
     <!-- Page Header -->
@@ -131,7 +132,7 @@
                         </div>
                     </div>
                     <div class="card-body p-0">
-                        <div id="farmMap" style="height: 500px; width: 100%;"></div>
+                        <div id="farmMap" style="height: calc(100vh - 280px); min-height: 350px; width: 100%;"></div>
                     </div>
                 </div>
             </div>
@@ -296,12 +297,22 @@
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Latitud Central:</label>
-                            <input type="number" step="0.000001" @bind="_editingFarm.Latitude" class="form-control" placeholder="-34.123456" />
+                            <input type="number" step="0.000001" @bind="_editingFarm.Latitude" class="form-control" placeholder="-34.123456" readonly />
                         </div>
                         <div class="col-md-6 mb-3">
                             <label class="form-label">Longitud Central:</label>
-                            <input type="number" step="0.000001" @bind="_editingFarm.Longitude" class="form-control" placeholder="-58.123456" />
+                            <input type="number" step="0.000001" @bind="_editingFarm.Longitude" class="form-control" placeholder="-58.123456" readonly />
                         </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label">
+                            <i class="fas fa-map-marker-alt me-2"></i>Seleccionar Coordenadas en el Mapa:
+                        </label>
+                        <div class="alert alert-info mb-2">
+                            <small><i class="fas fa-info-circle me-1"></i>Haz clic en el mapa para establecer el punto central de la granja</small>
+                        </div>
+                        <div id="centerPickerMap" style="height: 350px; width: 100%; border: 2px solid #dee2e6; border-radius: 8px;"></div>
                     </div>
 
                     <div class="alert alert-info">
@@ -346,6 +357,7 @@
     private bool _importSuccess = false;
     private bool _isDrawingMode = false;
     private string _currentPointCoordinates = "";
+    private DotNetObjectReference<FarmManagement>? _dotNetRef;
 
     protected override async Task OnInitializedAsync()
     {
@@ -357,6 +369,10 @@
     {
         if (firstRender)
         {
+            // Create DotNet reference for JS callbacks
+            _dotNetRef = DotNetObjectReference.Create(this);
+            await JSRuntime.InvokeVoidAsync("setFarmManagementDotNetRef", _dotNetRef);
+
             await InitializeMap();
         }
         else if (_selectedFarm != null)
@@ -466,13 +482,46 @@
         }
     }
 
-    private void ShowCreateFarmModal()
+    private async Task ShowCreateFarmModal()
     {
         _editingFarm = new FarmDto
         {
+            Latitude = -33.0167,  // Default center
+            Longitude = -58.5167,
             BoundaryCoordinates = new List<LatLngDto>()
         };
         _showFarmModal = true;
+        StateHasChanged();
+
+        // Wait a bit for modal to render, then initialize the center picker map
+        await Task.Delay(100);
+        await InitializeCenterPickerMap();
+    }
+
+    private async Task InitializeCenterPickerMap()
+    {
+        try
+        {
+            double lat = _editingFarm?.Latitude ?? -33.0167;
+            double lng = _editingFarm?.Longitude ?? -58.5167;
+            await JSRuntime.InvokeVoidAsync("initializeCenterPickerMap", lat, lng);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error initializing center picker map: {ex.Message}");
+        }
+    }
+
+    [JSInvokable]
+    public void UpdateFarmCenterCoordinates(double lat, double lng)
+    {
+        if (_editingFarm != null)
+        {
+            _editingFarm.Latitude = lat;
+            _editingFarm.Longitude = lng;
+            InvokeAsync(StateHasChanged);
+            Console.WriteLine($"Farm center updated to: {lat}, {lng}");
+        }
     }
 
     private void EditFarm(FarmDto farm)
@@ -492,9 +541,15 @@
 
         _editingFarm = _selectedFarm;
         _showFarmModal = true;
+        StateHasChanged();
 
-        // Update map with farm boundaries
-        InvokeAsync(async () => await UpdateMapWithFarm(_selectedFarm));
+        // Initialize center picker map and update map with farm boundaries
+        InvokeAsync(async () =>
+        {
+            await Task.Delay(100); // Wait for modal to render
+            await InitializeCenterPickerMap();
+            await UpdateMapWithFarm(_selectedFarm);
+        });
     }
 
     private async Task DeleteGeofencing(FarmDto farm)
@@ -865,10 +920,20 @@
         }
     }
 
-    private void CloseFarmModal()
+    private async Task CloseFarmModal()
     {
         _showFarmModal = false;
         _editingFarm = null;
+
+        // Cleanup center picker map
+        try
+        {
+            await JSRuntime.InvokeVoidAsync("cleanupCenterPickerMap");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error cleaning up center picker map: {ex.Message}");
+        }
     }
 
     private async Task SaveFarm()
@@ -990,6 +1055,11 @@
         }
     }
 
+    public void Dispose()
+    {
+        _dotNetRef?.Dispose();
+        _dotNetRef = null;
+    }
 }
 
 <!-- Leaflet CSS -->
@@ -1055,6 +1125,11 @@
                     attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
                     maxZoom: 19
                 }).addTo(farmMap);
+
+                // Recalculate map size on window resize
+                window.addEventListener('resize', function() {
+                    if (farmMap) setTimeout(function() { farmMap.invalidateSize(); }, 100);
+                });
 
                 // Initialize FeatureGroup to store drawn items
                 drawnItems = new L.FeatureGroup();
@@ -1723,6 +1798,121 @@
         const mapElement = document.getElementById("farmMap");
         if (mapElement) {
             mapElement.innerHTML = '';
+        }
+    };
+
+    // ============ CENTER PICKER MAP ============
+    let centerPickerMap = null;
+    let centerPickerMarker = null;
+    let farmManagementDotNetRef = null;
+
+    window.setFarmManagementDotNetRef = function(dotNetRef) {
+        farmManagementDotNetRef = dotNetRef;
+        console.log('FarmManagement DotNet reference set');
+    };
+
+    window.updateFarmCenterCoordinates = function(lat, lng) {
+        console.log('updateFarmCenterCoordinates called with:', lat, lng);
+        if (farmManagementDotNetRef) {
+            farmManagementDotNetRef.invokeMethodAsync('UpdateFarmCenterCoordinates', lat, lng);
+        } else {
+            console.error('farmManagementDotNetRef is null!');
+        }
+    };
+
+    window.initializeCenterPickerMap = function(initialLat, initialLng) {
+        console.log('Initializing center picker map with:', initialLat, initialLng);
+
+        // Use default coordinates if not provided
+        const lat = initialLat || -33.0167;
+        const lng = initialLng || -58.5167;
+
+        // Wait for Leaflet
+        function waitForLeaflet() {
+            if (typeof L === 'undefined') {
+                setTimeout(waitForLeaflet, 200);
+                return;
+            }
+
+            const mapElement = document.getElementById("centerPickerMap");
+            if (!mapElement) {
+                console.error("Center picker map element not found");
+                return;
+            }
+
+            try {
+                // Clean up existing map
+                if (centerPickerMap) {
+                    centerPickerMap.remove();
+                    centerPickerMap = null;
+                }
+
+                // Create the map
+                centerPickerMap = L.map('centerPickerMap', {
+                    center: [lat, lng],
+                    zoom: 13,
+                    zoomControl: true
+                });
+
+                // Add tile layer
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    attribution: '© OpenStreetMap contributors',
+                    maxZoom: 19
+                }).addTo(centerPickerMap);
+
+                // Add initial marker
+                const markerIcon = L.divIcon({
+                    className: 'center-picker-marker',
+                    html: '<div style="background: #dc3545; width: 30px; height: 30px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 3px solid white; box-shadow: 0 2px 8px rgba(0,0,0,0.3);"><div style="position: absolute; width: 10px; height: 10px; background: white; border-radius: 50%; top: 50%; left: 50%; transform: translate(-50%, -50%) rotate(45deg);"></div></div>',
+                    iconSize: [30, 42],
+                    iconAnchor: [15, 42]
+                });
+
+                centerPickerMarker = L.marker([lat, lng], {
+                    icon: markerIcon,
+                    draggable: true
+                }).addTo(centerPickerMap);
+
+                // Update coordinates when marker is dragged
+                centerPickerMarker.on('dragend', function(e) {
+                    const pos = e.target.getLatLng();
+                    window.updateFarmCenterCoordinates(pos.lat, pos.lng);
+                });
+
+                // Click on map to move marker
+                centerPickerMap.on('click', function(e) {
+                    centerPickerMarker.setLatLng(e.latlng);
+                    window.updateFarmCenterCoordinates(e.latlng.lat, e.latlng.lng);
+                });
+
+                // Fix map size
+                setTimeout(() => {
+                    if (centerPickerMap) centerPickerMap.invalidateSize();
+                }, 100);
+
+                console.log('✅ Center picker map initialized');
+            } catch (error) {
+                console.error('Error initializing center picker map:', error);
+            }
+        }
+
+        waitForLeaflet();
+    };
+
+    window.cleanupCenterPickerMap = function() {
+        if (centerPickerMap) {
+            centerPickerMap.remove();
+            centerPickerMap = null;
+        }
+        centerPickerMarker = null;
+    };
+
+    window.updateCenterPickerMarker = function(lat, lng) {
+        if (centerPickerMarker) {
+            centerPickerMarker.setLatLng([lat, lng]);
+            if (centerPickerMap) {
+                centerPickerMap.setView([lat, lng], centerPickerMap.getZoom());
+            }
         }
     };
 </script>

@@ -3,7 +3,7 @@ Emulador GPS Stress Test - Trackers Ganaderos
 Gualeguaychu, Entre Rios, Argentina
 
 Emulador avanzado con:
-- Escala configurable (15 a 200+ trackers)
+- Escala configurable (15 a 400+ trackers)
 - Intervalos de transmision variables por estado
 - Simulacion de escenarios de alertas (aislamiento, dispersion, merodeo, celo)
 - Threading para transmision concurrente
@@ -77,7 +77,7 @@ PRESETS = {
         "apagado_intervalo_seg": 30, # Segundos entre cada apagado de tracker
     },
     "celo_test_1": {
-        "num_trackers": 150,
+        "num_trackers": 400,
         "escenarios_activos": False,  # Controlado manualmente por celo_coordinator
         "intervalo_fijo": None,
         "usar_threading": True,
@@ -816,9 +816,9 @@ def generar_trackers(num_trackers):
     # Vacas
     for i in range(1, num_trackers):
         vaca = TrackerEmulado(
-            device_id=f"COW_GPS_ER_{i:03d}",
-            serial_number=f"GPS-ER-2024-{i:03d}",
-            nombre=f"Vaca {i:03d} - {CAMPO_NOMBRE}",
+            device_id=f"COW_GPS_ER_{i:04d}",
+            serial_number=f"GPS-ER-2024-{i:04d}",
+            nombre=f"Vaca {i:04d} - {CAMPO_NOMBRE}",
             es_toro=False
         )
         trackers.append(vaca)
